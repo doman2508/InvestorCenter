@@ -1,0 +1,7 @@
+node_modules/
+dist/
+dist-server/
+data/investor-center.json
+data/investor-center.test.json
+tmp_xlsx_inspect/
+.DS_Store

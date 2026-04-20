@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import XLSX from "xlsx";
-import { getAccounts, replaceTransactionsForAccount, upsertInstrumentMapping } from "../repository.js";
+import { getAccounts, upsertInstrumentMapping, upsertTransactions } from "../repository.js";
 import type { BrokerImportResult, Transaction } from "../types.js";
 
 type RawSheetRow = Record<string, string | number | null | undefined>;
@@ -75,11 +75,44 @@ function buildInstrumentTickerMap(rows: RawSheetRow[]) {
   for (const row of rows) {
     const instrument = String(row["Instrument"] ?? "").trim();
     const ticker = String(row["Ticker"] ?? "").trim();
-    if (instrument && ticker && !map.has(instrument)) {
+    const type = String(row["Type"] ?? "").trim();
+    const volume = normalizeNumber(row["Volume"]);
+    if (instrument && ticker && type && volume > 0 && !map.has(instrument)) {
       map.set(instrument, ticker);
     }
   }
   return map;
+}
+
+function inferCurrencyFromTicker(ticker: string, instrument: string, category: string, fallbackRate?: number | null) {
+  const upperTicker = ticker.trim().toUpperCase();
+  const upperInstrument = instrument.trim().toUpperCase();
+  const upperCategory = category.trim().toUpperCase();
+
+  if (upperTicker.endsWith(".PL") || upperTicker.endsWith(".WA")) {
+    return "PLN";
+  }
+  if (
+    upperTicker.endsWith(".DE") ||
+    upperTicker.endsWith(".NL") ||
+    upperTicker.endsWith(".FR") ||
+    upperTicker.endsWith(".MC") ||
+    upperTicker.endsWith(".MI")
+  ) {
+    return "EUR";
+  }
+  if (upperTicker.endsWith(".UK") || upperTicker.endsWith(".L")) {
+    return "GBP";
+  }
+  if (upperTicker.endsWith(".US") || upperTicker === "OIL" || upperCategory === "CFD" || upperInstrument.includes("OIL")) {
+    return "USD";
+  }
+
+  if (fallbackRate && fallbackRate > 0) {
+    return inferCurrencyFromAmount(fallbackRate, 1, 1);
+  }
+
+  return "PLN";
 }
 
 function parseTradeComment(comment: string) {
@@ -135,6 +168,11 @@ function buildCashTransactions(rows: RawSheetRow[], accountId: number, instrumen
     if (type === "Stock purchase" || type === "Stock sell") {
       const parsedTrade = parseTradeComment(comment);
       if (!parsedTrade) {
+        skipped += 1;
+        continue;
+      }
+
+      if (parsedTrade.phase === "CLOSE") {
         skipped += 1;
         continue;
       }
@@ -242,6 +280,77 @@ function buildCashTransactions(rows: RawSheetRow[], accountId: number, instrumen
   return { transactions, notes };
 }
 
+function buildClosedPositionTransactions(
+  rows: RawSheetRow[],
+  accountId: number,
+  instrumentTickerMap: Map<string, string>
+) {
+  const transactions: Omit<Transaction, "id">[] = [];
+  let skipped = 0;
+
+  for (const row of rows) {
+    const instrument = String(row["Instrument"] ?? "").trim();
+    const ticker = String(row["Ticker"] ?? "").trim();
+    const type = String(row["Type"] ?? "").trim().toUpperCase();
+    const category = String(row["Category"] ?? "").trim();
+    const quantity = normalizeNumber(row["Volume"]);
+    const openPrice = normalizeNumber(row["Open Price"]);
+    const closePrice = normalizeNumber(row["Close Price"]);
+    const openDate = normalizeDate(row["Open Time (UTC)"]);
+    const closeDate = normalizeDate(row["Close Time (UTC)"]);
+
+    if (!instrument || !ticker || !type || quantity <= 0 || !openPrice || !closePrice || !openDate || !closeDate) {
+      skipped += 1;
+      continue;
+    }
+
+    const resolvedSymbol = instrumentTickerMap.get(instrument) ?? ticker ?? slugifyInstrument(instrument);
+    const purchaseValue = normalizeNumber(row["Purchase Value"]);
+    const saleValue = normalizeNumber(row["Sale Value"]);
+    const impliedOpenRate = quantity > 0 && openPrice > 0 ? purchaseValue / (quantity * openPrice) : null;
+    const currency = inferCurrencyFromTicker(ticker, instrument, category, impliedOpenRate);
+    const openType = type === "SELL" ? "SELL" : "BUY";
+    const closeType = type === "SELL" ? "BUY" : "SELL";
+
+    const openTx: Omit<Transaction, "id"> = {
+      accountId,
+      symbol: resolvedSymbol,
+      tradeDate: openDate,
+      type: openType,
+      quantity,
+      price: openPrice,
+      fees: 0,
+      currency
+    };
+    if (purchaseValue > 0) {
+      openTx.settlementValue = purchaseValue;
+      openTx.settlementCurrency = "PLN";
+    }
+
+    const closeTx: Omit<Transaction, "id"> = {
+      accountId,
+      symbol: resolvedSymbol,
+      tradeDate: closeDate,
+      type: closeType,
+      quantity,
+      price: closePrice,
+      fees: 0,
+      currency
+    };
+    if (saleValue > 0) {
+      closeTx.settlementValue = saleValue;
+      closeTx.settlementCurrency = "PLN";
+    }
+
+    transactions.push(openTx, closeTx);
+  }
+
+  return {
+    transactions,
+    notes: [`Mapped ${transactions.length} synthetic trade legs from Closed Positions and skipped ${skipped} footer/invalid rows.`]
+  };
+}
+
 function deriveMappingsFromComments(rows: RawSheetRow[], accountId: number) {
   let discovered = 0;
   for (const row of rows) {
@@ -300,19 +409,25 @@ export function importXtbWorkbook(filePath: string, accountName = "XTB"): Broker
   const instrumentTickerMap = buildInstrumentTickerMap(closedRows);
 
   const cash = buildCashTransactions(cashRows, account.id, instrumentTickerMap);
-  const allRows = [...cash.transactions];
-  const replaced = replaceTransactionsForAccount(account.id, allRows);
+  const closed = buildClosedPositionTransactions(closedRows, account.id, instrumentTickerMap);
+  const allRows = [...closed.transactions, ...cash.transactions];
+  const merged = upsertTransactions(allRows);
   const discoveredMappings = deriveMappingsFromComments(cashRows, account.id);
 
   return {
-    imported: replaced.length,
-    skipped: 0,
+    imported: merged.imported,
+    skipped: merged.skipped,
     errors: [],
+    breakdown: {
+      closedPositions: closed.transactions.length,
+      cashOperations: cash.transactions.length
+    },
     notes: [
       `Built instrument-to-ticker map for ${instrumentTickerMap.size} instruments from Closed Positions.`,
+      ...closed.notes,
       ...cash.notes,
       `Discovered ${discoveredMappings} mapping hints from cash-operation comments.`,
-      "Replaced existing transactions for this account with the workbook import."
+      "Merged workbook data into existing XTB history with duplicate protection."
     ]
   };
 }

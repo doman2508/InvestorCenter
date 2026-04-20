@@ -1185,7 +1185,12 @@ export function App() {
       setImportMessage(json.errors?.join(" ") ?? json.message ?? "XTB import failed.");
       return;
     }
-    setImportMessage(`XTB import: imported ${json.imported}, skipped ${json.skipped}. ${json.notes?.join(" ") ?? ""}`);
+    const fileLabel = xtbFile.name;
+    const closedCount = json.breakdown?.closedPositions ?? 0;
+    const cashCount = json.breakdown?.cashOperations ?? 0;
+    setImportMessage(
+      `XTB (${fileLabel}): dodano ${json.imported}, pominieto ${json.skipped}. Closed Positions: ${closedCount}, Cash Operations: ${cashCount}. ${json.notes?.join(" ") ?? ""}`
+    );
     setXtbFile(null);
     await loadDashboard();
   }

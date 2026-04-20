@@ -206,6 +206,10 @@ export interface BrokerImportResult {
   skipped: number;
   errors: string[];
   notes: string[];
+  breakdown?: {
+    closedPositions?: number;
+    cashOperations?: number;
+  };
 }
 
 export interface MarketRefreshResult {

@@ -25,7 +25,13 @@ function normalizeDate(value: unknown): string | null {
     }
     const month = String(parsed.m).padStart(2, "0");
     const day = String(parsed.d).padStart(2, "0");
-    return `${parsed.y}-${month}-${day}`;
+    const hour = Number(parsed.H ?? 0);
+    const minute = Number(parsed.M ?? 0);
+    const second = Number(parsed.S ?? 0);
+    if (hour === 0 && minute === 0 && second === 0) {
+      return `${parsed.y}-${month}-${day}`;
+    }
+    return `${parsed.y}-${month}-${day} ${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}:${String(second).padStart(2, "0")}`;
   }
 
   const raw = String(value).trim();
@@ -33,8 +39,14 @@ function normalizeDate(value: unknown): string | null {
     return null;
   }
 
-  const match = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  return match ? `${match[1]}-${match[2]}-${match[3]}` : null;
+  const match = raw.match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?/);
+  if (!match) {
+    return null;
+  }
+  if (!match[4] || !match[5]) {
+    return `${match[1]}-${match[2]}-${match[3]}`;
+  }
+  return `${match[1]}-${match[2]}-${match[3]} ${match[4]}:${match[5]}:${match[6] ?? "00"}`;
 }
 
 function normalizeNumber(value: unknown): number {
@@ -172,11 +184,6 @@ function buildCashTransactions(rows: RawSheetRow[], accountId: number, instrumen
         continue;
       }
 
-      if (parsedTrade.phase === "CLOSE") {
-        skipped += 1;
-        continue;
-      }
-
       const inferredType =
         parsedTrade.phase === "OPEN"
           ? parsedTrade.side
@@ -280,77 +287,6 @@ function buildCashTransactions(rows: RawSheetRow[], accountId: number, instrumen
   return { transactions, notes };
 }
 
-function buildClosedPositionTransactions(
-  rows: RawSheetRow[],
-  accountId: number,
-  instrumentTickerMap: Map<string, string>
-) {
-  const transactions: Omit<Transaction, "id">[] = [];
-  let skipped = 0;
-
-  for (const row of rows) {
-    const instrument = String(row["Instrument"] ?? "").trim();
-    const ticker = String(row["Ticker"] ?? "").trim();
-    const type = String(row["Type"] ?? "").trim().toUpperCase();
-    const category = String(row["Category"] ?? "").trim();
-    const quantity = normalizeNumber(row["Volume"]);
-    const openPrice = normalizeNumber(row["Open Price"]);
-    const closePrice = normalizeNumber(row["Close Price"]);
-    const openDate = normalizeDate(row["Open Time (UTC)"]);
-    const closeDate = normalizeDate(row["Close Time (UTC)"]);
-
-    if (!instrument || !ticker || !type || quantity <= 0 || !openPrice || !closePrice || !openDate || !closeDate) {
-      skipped += 1;
-      continue;
-    }
-
-    const resolvedSymbol = instrumentTickerMap.get(instrument) ?? ticker ?? slugifyInstrument(instrument);
-    const purchaseValue = normalizeNumber(row["Purchase Value"]);
-    const saleValue = normalizeNumber(row["Sale Value"]);
-    const impliedOpenRate = quantity > 0 && openPrice > 0 ? purchaseValue / (quantity * openPrice) : null;
-    const currency = inferCurrencyFromTicker(ticker, instrument, category, impliedOpenRate);
-    const openType = type === "SELL" ? "SELL" : "BUY";
-    const closeType = type === "SELL" ? "BUY" : "SELL";
-
-    const openTx: Omit<Transaction, "id"> = {
-      accountId,
-      symbol: resolvedSymbol,
-      tradeDate: openDate,
-      type: openType,
-      quantity,
-      price: openPrice,
-      fees: 0,
-      currency
-    };
-    if (purchaseValue > 0) {
-      openTx.settlementValue = purchaseValue;
-      openTx.settlementCurrency = "PLN";
-    }
-
-    const closeTx: Omit<Transaction, "id"> = {
-      accountId,
-      symbol: resolvedSymbol,
-      tradeDate: closeDate,
-      type: closeType,
-      quantity,
-      price: closePrice,
-      fees: 0,
-      currency
-    };
-    if (saleValue > 0) {
-      closeTx.settlementValue = saleValue;
-      closeTx.settlementCurrency = "PLN";
-    }
-
-    transactions.push(openTx, closeTx);
-  }
-
-  return {
-    transactions,
-    notes: [`Mapped ${transactions.length} synthetic trade legs from Closed Positions and skipped ${skipped} footer/invalid rows.`]
-  };
-}
-
 function deriveMappingsFromComments(rows: RawSheetRow[], accountId: number) {
   let discovered = 0;
   for (const row of rows) {
@@ -409,9 +345,7 @@ export function importXtbWorkbook(filePath: string, accountName = "XTB"): Broker
   const instrumentTickerMap = buildInstrumentTickerMap(closedRows);
 
   const cash = buildCashTransactions(cashRows, account.id, instrumentTickerMap);
-  const closed = buildClosedPositionTransactions(closedRows, account.id, instrumentTickerMap);
-  const allRows = [...closed.transactions, ...cash.transactions];
-  const merged = upsertTransactions(allRows);
+  const merged = upsertTransactions(cash.transactions);
   const discoveredMappings = deriveMappingsFromComments(cashRows, account.id);
 
   return {
@@ -419,12 +353,12 @@ export function importXtbWorkbook(filePath: string, accountName = "XTB"): Broker
     skipped: merged.skipped,
     errors: [],
     breakdown: {
-      closedPositions: closed.transactions.length,
+      closedPositions: 0,
       cashOperations: cash.transactions.length
     },
     notes: [
       `Built instrument-to-ticker map for ${instrumentTickerMap.size} instruments from Closed Positions.`,
-      ...closed.notes,
+      "Used Closed Positions only for instrument mapping. Historical closed trades are not imported into portfolio holdings.",
       ...cash.notes,
       `Discovered ${discoveredMappings} mapping hints from cash-operation comments.`,
       "Merged workbook data into existing XTB history with duplicate protection."

@@ -83,20 +83,47 @@ export function upsertTransactions(rows: Omit<Transaction, "id">[]) {
   const store = readStore();
   let imported = 0;
   let skipped = 0;
+  const transactionKey = (item: Omit<Transaction, "id"> | Transaction) =>
+    [
+      item.accountId,
+      item.symbol,
+      item.tradeDate,
+      item.type,
+      item.quantity,
+      item.price,
+      item.currency
+    ].join("|");
+  const existingCounts = new Map<string, number>();
+
+  for (const transaction of store.transactions) {
+    const key = transactionKey(transaction);
+    existingCounts.set(key, (existingCounts.get(key) ?? 0) + 1);
+  }
+
+  const seenIncoming = new Map<string, number>();
 
   for (const item of rows) {
-    const duplicate = store.transactions.find(
-      (tx) =>
-        tx.accountId === item.accountId &&
-        tx.symbol === item.symbol &&
-        tx.tradeDate === item.tradeDate &&
-        tx.type === item.type &&
-        tx.quantity === item.quantity &&
-        tx.price === item.price
-    );
+    const key = transactionKey(item);
+    const currentIncomingCount = (seenIncoming.get(key) ?? 0) + 1;
+    seenIncoming.set(key, currentIncomingCount);
+    const existingCount = existingCounts.get(key) ?? 0;
 
-    if (duplicate) {
-      if ((duplicate.settlementValue == null || duplicate.settlementCurrency == null) && (item.settlementValue != null || item.settlementCurrency != null)) {
+    if (currentIncomingCount <= existingCount) {
+      const duplicate = store.transactions.find(
+        (tx) =>
+          tx.accountId === item.accountId &&
+          tx.symbol === item.symbol &&
+          tx.tradeDate === item.tradeDate &&
+          tx.type === item.type &&
+          tx.quantity === item.quantity &&
+          tx.price === item.price &&
+          tx.currency === item.currency
+      );
+      if (
+        duplicate &&
+        (duplicate.settlementValue == null || duplicate.settlementCurrency == null) &&
+        (item.settlementValue != null || item.settlementCurrency != null)
+      ) {
         duplicate.settlementValue = item.settlementValue ?? duplicate.settlementValue ?? null;
         duplicate.settlementCurrency = item.settlementCurrency ?? duplicate.settlementCurrency ?? null;
         writeStore(store);

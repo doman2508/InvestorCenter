@@ -175,6 +175,26 @@ export interface DashboardResponse {
   watchlist: WatchlistItem[];
 }
 
+export interface MarketScanItem {
+  asset: string;
+  label: string;
+  marketSymbol: string;
+  assetClass: AssetClass | "FX" | "INDEX";
+  signal: "WATCH LONG" | "WATCH SHORT" | "AVOID";
+  strength: "HIGH" | "MEDIUM" | "LOW";
+  priceNow: number;
+  quoteCurrency: string;
+  change1hPct: number;
+  change1dPct: number;
+  atr: number;
+  breakout: "up" | "down" | "none";
+  score: number;
+  reason: string;
+  riskNote: string;
+  source: string;
+  updatedAt: string;
+}
+
 export interface CsvImportResult {
   imported: number;
   skipped: number;

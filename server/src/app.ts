@@ -1,5 +1,8 @@
 import cors from "cors";
 import express from "express";
+import fs from "node:fs";
+import path from "node:path";
+import multer from "multer";
 import { z } from "zod";
 import {
   addHolding,
@@ -13,6 +16,8 @@ import {
 } from "./repository.js";
 import { refreshMarketData } from "./services/marketData.js";
 import { getDashboard } from "./services/portfolio.js";
+import { scanMarket } from "./services/marketScanner.js";
+import { getTradeSetup, isSupportedInstrument, isSupportedInterval } from "./services/signalService.js";
 import { importTransactionsFromCsv } from "./services/importer.js";
 import { importEmaklerHistory } from "./services/emaklerImporter.js";
 import { importTreasuryBondsWorkbook } from "./services/treasuryBondsImporter.js";
@@ -58,12 +63,44 @@ const importTreasuryBondsPathSchema = z.object({
   filePath: z.string().min(3)
 });
 
+const importEmaklerUploadSchema = z.object({
+  accountName: z.enum(["IKE", "IKZE"])
+});
+
 const instrumentMappingSchema = z.object({
   accountId: z.coerce.number().int().positive(),
   sourceSymbol: z.string().min(1),
   marketTicker: z.string().min(1),
   label: z.string().optional().nullable()
 });
+
+const uploadDir = path.join(process.cwd(), "data", "uploads");
+fs.mkdirSync(uploadDir, { recursive: true });
+
+const upload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, callback) => {
+      callback(null, uploadDir);
+    },
+    filename: (_req, file, callback) => {
+      const ext = path.extname(file.originalname);
+      const safeBase = path
+        .basename(file.originalname, ext)
+        .replace(/[^a-zA-Z0-9_-]+/g, "-")
+        .replace(/^-+|-+$/g, "")
+        .slice(0, 80);
+      callback(null, `${Date.now()}-${safeBase || "upload"}${ext}`);
+    }
+  })
+});
+
+function removeUploadedFile(filePath: string) {
+  try {
+    fs.unlinkSync(filePath);
+  } catch {
+    // Best-effort cleanup for temporary uploads.
+  }
+}
 
 export function createApp() {
   const app = express();
@@ -82,6 +119,32 @@ export function createApp() {
   app.post("/api/market/refresh", async (_req, res) => {
     const result = await refreshMarketData();
     res.json(result);
+  });
+
+  app.get("/api/market/scan", async (_req, res) => {
+    try {
+      const result = await scanMarket();
+      res.json(result);
+    } catch (error) {
+      res.status(500).json({
+        message: error instanceof Error ? error.message : "Market scan unavailable."
+      });
+    }
+  });
+
+  app.get("/api/trade-setup", async (req, res) => {
+    try {
+      const rawInstrument = typeof req.query.instrument === "string" ? req.query.instrument.toUpperCase() : "WTI";
+      const rawInterval = typeof req.query.interval === "string" ? req.query.interval : "15m";
+      const instrument = isSupportedInstrument(rawInstrument) ? rawInstrument : "WTI";
+      const interval = isSupportedInterval(rawInterval) ? rawInterval : "15m";
+      const result = await getTradeSetup(instrument, interval);
+      res.json(result);
+    } catch (error) {
+      res.status(500).json({
+        message: error instanceof Error ? error.message : "Trade setup unavailable."
+      });
+    }
   });
 
   app.post("/api/import/csv", (req, res) => {
@@ -107,6 +170,23 @@ export function createApp() {
     res.json(result);
   });
 
+  app.post("/api/import/xtb-upload", upload.single("file"), (req, res) => {
+    if (!req.file) {
+      res.status(400).json({ message: "Brak pliku do importu XTB." });
+      return;
+    }
+    try {
+      const result = importXtbWorkbook(req.file.path, "XTB");
+      if (result.errors.length > 0) {
+        res.status(400).json(result);
+        return;
+      }
+      res.json(result);
+    } finally {
+      removeUploadedFile(req.file.path);
+    }
+  });
+
   app.post("/api/import/emakler-path", (req, res) => {
     const parsed = importEmaklerPathSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -125,6 +205,33 @@ export function createApp() {
     });
   });
 
+  app.post("/api/import/emakler-upload", upload.single("file"), (req, res) => {
+    if (!req.file) {
+      res.status(400).json({ message: "Brak pliku do importu eMakler." });
+      return;
+    }
+    const parsed = importEmaklerUploadSchema.safeParse(req.body);
+    if (!parsed.success) {
+      removeUploadedFile(req.file.path);
+      res.status(400).json({ message: parsed.error.issues[0]?.message ?? "Invalid eMakler import request." });
+      return;
+    }
+    try {
+      const result = importEmaklerHistory(req.file.path, parsed.data.accountName);
+      if (result.errors.length > 0) {
+        res.status(400).json(result);
+        return;
+      }
+      const syncResult = syncHoldingsForAccount(parsed.data.accountName);
+      res.json({
+        ...result,
+        notes: [...result.notes, `Rebuilt ${syncResult.rebuilt} current holdings for ${parsed.data.accountName}.`]
+      });
+    } finally {
+      removeUploadedFile(req.file.path);
+    }
+  });
+
   app.post("/api/import/treasury-bonds-path", (req, res) => {
     const parsed = importTreasuryBondsPathSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -137,6 +244,23 @@ export function createApp() {
       return;
     }
     res.json(result);
+  });
+
+  app.post("/api/import/treasury-bonds-upload", upload.single("file"), (req, res) => {
+    if (!req.file) {
+      res.status(400).json({ message: "Brak pliku do importu obligacji." });
+      return;
+    }
+    try {
+      const result = importTreasuryBondsWorkbook(req.file.path);
+      if (result.errors.length > 0) {
+        res.status(400).json(result);
+        return;
+      }
+      res.json(result);
+    } finally {
+      removeUploadedFile(req.file.path);
+    }
   });
 
   app.get("/api/instrument-mappings", (_req, res) => {

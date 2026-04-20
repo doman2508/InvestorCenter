@@ -212,6 +212,52 @@ label {
   align-content: start;
 }
 
+.file-input-hidden {
+  display: none;
+}
+
+.field-label {
+  margin: 0;
+  font-weight: 700;
+  color: #21455e;
+}
+
+.file-dropzone-wrap {
+  gap: 8px;
+}
+
+.file-dropzone {
+  border: 1px dashed rgba(33, 69, 94, 0.28);
+  background: rgba(248, 251, 253, 0.92);
+  border-radius: 18px;
+  padding: 18px 16px;
+  cursor: pointer;
+  transition: border-color 160ms ease, transform 160ms ease, background 160ms ease;
+}
+
+.file-dropzone strong,
+.file-dropzone p {
+  margin: 0;
+}
+
+.file-dropzone p {
+  color: #587086;
+  margin-top: 4px;
+}
+
+.file-dropzone.dragging {
+  border-color: rgba(23, 107, 114, 0.8);
+  background: rgba(228, 243, 244, 0.95);
+  transform: translateY(-1px);
+}
+
+.selected-file-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
 .subsettings {
   padding: 14px 16px;
   border-radius: 18px;
@@ -368,6 +414,68 @@ label {
   gap: 14px;
 }
 
+.trade-setup-summary,
+.trade-setup-grid,
+.trade-levels-grid {
+  display: grid;
+  gap: 14px;
+}
+
+.trade-data-meta {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
+.trade-controls {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+}
+
+.trade-plan-toggle {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+.trade-sizer,
+.trade-plan-note {
+  display: grid;
+  gap: 14px;
+}
+
+.trade-warnings {
+  display: grid;
+  gap: 8px;
+}
+
+.trade-invalid-banner {
+  margin-top: 14px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: rgba(181, 76, 49, 0.1);
+  border: 1px solid rgba(181, 76, 49, 0.18);
+  color: #8e3d29;
+}
+
+.trade-invalid-banner p {
+  margin: 6px 0 0;
+}
+
+.trade-sizer-inputs {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 14px;
+}
+
+.trade-controls label {
+  min-width: 160px;
+}
+
 .today-account-grid {
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   margin-top: 14px;
@@ -376,6 +484,170 @@ label {
 .opportunity-grid {
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   margin-top: 14px;
+}
+
+.trade-setup-summary {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  margin-top: 16px;
+}
+
+.trade-setup-grid {
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  margin-top: 14px;
+}
+
+.trade-levels-grid {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  margin-top: 14px;
+}
+
+.trade-summary-card,
+.trade-card,
+.trade-level-card {
+  padding: 16px;
+  border-radius: 18px;
+  border: 1px solid rgba(23, 34, 45, 0.08);
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.trade-setup-hero {
+  background: linear-gradient(180deg, rgba(250, 252, 254, 0.96), rgba(242, 247, 250, 0.9));
+}
+
+.trade-price-card {
+  background: linear-gradient(135deg, rgba(22, 52, 73, 0.96), rgba(33, 107, 114, 0.9) 58%, rgba(192, 122, 51, 0.82) 100%);
+  color: #fff;
+}
+
+.trade-price-card .summary-label,
+.trade-price-card small {
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.trade-card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.trade-level-card span {
+  display: block;
+  margin-bottom: 8px;
+  color: #667788;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.trade-chart-panel {
+  overflow: hidden;
+}
+
+.interactive-chart-shell {
+  position: relative;
+  margin-top: 10px;
+}
+
+.chart-toolbar,
+.interval-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.interval-toggle {
+  padding: 4px;
+  border-radius: 999px;
+  background: rgba(22, 52, 73, 0.06);
+}
+
+.interval-chip {
+  border: 0;
+  background: transparent;
+  color: #4f6171;
+  border-radius: 999px;
+  padding: 8px 12px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.interval-chip.active {
+  background: #163449;
+  color: #fff;
+  box-shadow: 0 10px 24px rgba(22, 52, 73, 0.18);
+}
+
+.trade-chart-host {
+  width: 100%;
+  min-height: 380px;
+}
+
+.trade-chart-tooltip {
+  position: absolute;
+  z-index: 3;
+  display: none;
+  min-width: 120px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(22, 34, 45, 0.92);
+  color: #fff;
+  pointer-events: none;
+  font-size: 0.86rem;
+  line-height: 1.45;
+  box-shadow: 0 18px 40px rgba(23, 34, 45, 0.18);
+}
+
+.signal-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 12px;
+  border-radius: 999px;
+  font-size: 0.95rem;
+  line-height: 1.2;
+}
+
+.signal-pill.long {
+  background: rgba(13, 122, 72, 0.12);
+  color: #0d7a48;
+}
+
+.signal-pill.short {
+  background: rgba(181, 76, 49, 0.12);
+  color: #b54c31;
+}
+
+.signal-pill.wait {
+  background: rgba(22, 52, 73, 0.08);
+  color: #21455e;
+}
+
+.quality-pill.high,
+.quality-pill.medium,
+.quality-pill.low {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 12px;
+  border-radius: 999px;
+  font-size: 0.95rem;
+}
+
+.quality-pill.high {
+  background: rgba(13, 122, 72, 0.12);
+  color: #0d7a48;
+}
+
+.quality-pill.medium {
+  background: rgba(192, 122, 51, 0.14);
+  color: #9a6734;
+}
+
+.quality-pill.low {
+  background: rgba(181, 76, 49, 0.12);
+  color: #b54c31;
 }
 
 .opportunity-spotlight {
@@ -617,6 +889,13 @@ textarea {
   border: 0;
   border-radius: 999px;
   padding: 12px 18px;
+}
+
+.primary-button:disabled,
+.secondary-button:disabled,
+.ghost-button:disabled {
+  cursor: progress;
+  opacity: 0.7;
 }
 
 .secondary-button,

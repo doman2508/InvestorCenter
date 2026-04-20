@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState, type FormEvent } from "react";
-import type { DashboardResponse, InstrumentMapping } from "./types";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent, type FormEvent } from "react";
+import { CandlestickSeries, ColorType, createChart } from "lightweight-charts";
+import type { DashboardResponse, InstrumentMapping, MarketScanItem, TradeSetupResponse } from "./types";
 
-type ViewName = "today" | "portfolio" | "watchlist";
+type ViewName = "today" | "portfolio" | "market-radar" | "trade-setup" | "watchlist";
 type AssetClass = "ETF" | "STOCK" | "BOND" | "COMMODITY" | "CASH";
 type Freshness = "fresh" | "stale";
 
@@ -58,6 +59,16 @@ function fmtQuote(value: number) {
   return quote.format(value);
 }
 
+function fmtSignedAmount(value: number) {
+  const prefix = value > 0 ? "+" : "";
+  return `${prefix}${fmtAmount(value)}`;
+}
+
+function fmtSignedPct(value: number) {
+  const prefix = value > 0 ? "+" : "";
+  return `${prefix}${fmtPct(value)}`;
+}
+
 function fmtDate(value: string | null) {
   if (!value) {
     return "brak";
@@ -71,6 +82,89 @@ function fmtDate(value: string | null) {
     month: "2-digit",
     year: "numeric"
   });
+}
+
+function fmtDateTime(value: string | null) {
+  if (!value) {
+    return "brak";
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+  return parsed.toLocaleString("pl-PL", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit"
+  });
+}
+
+type FileDropzoneProps = {
+  label: string;
+  accept?: string;
+  file: File | null;
+  onFileSelect: (file: File | null) => void;
+};
+
+function FileDropzone({ label, accept, file, onFileSelect }: FileDropzoneProps) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+
+  function handleFileInput(event: ChangeEvent<HTMLInputElement>) {
+    onFileSelect(event.target.files?.[0] ?? null);
+  }
+
+  function handleDrop(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    setIsDragging(false);
+    const droppedFile = event.dataTransfer.files?.[0] ?? null;
+    onFileSelect(droppedFile);
+  }
+
+  return (
+    <div className="stack file-dropzone-wrap">
+      <p className="field-label">{label}</p>
+      <input
+        ref={inputRef}
+        className="file-input-hidden"
+        type="file"
+        accept={accept}
+        onChange={handleFileInput}
+      />
+      <div
+        className={`file-dropzone ${isDragging ? "dragging" : ""}`}
+        onDragOver={(event) => {
+          event.preventDefault();
+          setIsDragging(true);
+        }}
+        onDragLeave={() => setIsDragging(false)}
+        onDrop={handleDrop}
+        onClick={() => inputRef.current?.click()}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            inputRef.current?.click();
+          }
+        }}
+      >
+        <strong>{file ? file.name : "Upusc plik tutaj"}</strong>
+        <p>{file ? "Kliknij, aby podmienic plik" : "albo kliknij, aby wybrac z komputera"}</p>
+      </div>
+      {file ? (
+        <div className="selected-file-row">
+          <span className="muted">Wybrany plik: {file.name}</span>
+          <button className="ghost-button" type="button" onClick={() => onFileSelect(null)}>
+            Wyczyść
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 function daysUntil(value: string | null) {
@@ -108,6 +202,127 @@ function actionBiasClass(value: DashboardResponse["dailyBrief"]["opportunityRada
     return "bias-chip trim-risk";
   }
   return "bias-chip watch";
+}
+
+function preferredActionLabel(value: TradeSetupResponse["preferredAction"]) {
+  if (value === "LONG") {
+    return "Przewaga po stronie long";
+  }
+  if (value === "SHORT") {
+    return "Przewaga po stronie short";
+  }
+  return "Na razie czekaj";
+}
+
+function preferredActionClass(value: TradeSetupResponse["preferredAction"]) {
+  if (value === "LONG") {
+    return "signal-pill long";
+  }
+  if (value === "SHORT") {
+    return "signal-pill short";
+  }
+  return "signal-pill wait";
+}
+
+function marketSignalClass(value: MarketScanItem["signal"]) {
+  if (value === "WATCH LONG") {
+    return "signal-pill long";
+  }
+  if (value === "WATCH SHORT") {
+    return "signal-pill short";
+  }
+  return "signal-pill wait";
+}
+
+function strengthClass(value: MarketScanItem["strength"]) {
+  if (value === "HIGH") {
+    return "quality-pill high";
+  }
+  if (value === "MEDIUM") {
+    return "quality-pill medium";
+  }
+  return "quality-pill low";
+}
+
+function setupQualityClass(value: TradeSetupResponse["setupQuality"]) {
+  if (value === "Wysoka") {
+    return "quality-pill high";
+  }
+  if (value === "Srednia") {
+    return "quality-pill medium";
+  }
+  return "quality-pill low";
+}
+
+function roundPrice(value: number) {
+  if (value >= 100) {
+    return Number(value.toFixed(1));
+  }
+  if (value >= 10) {
+    return Number(value.toFixed(2));
+  }
+  return Number(value.toFixed(3));
+}
+
+function buildTradeSetup(idea: DashboardResponse["dailyBrief"]["opportunityRadar"][number]) {
+  const isCommodity = idea.assetClass === "COMMODITY";
+  const entryBufferPct = isCommodity ? 0.8 : 0.6;
+  const pullbackPct =
+    idea.actionBias === "buy-on-pullback"
+      ? isCommodity ? 1.6 : 1.2
+      : idea.actionBias === "trim-risk"
+        ? isCommodity ? 2.4 : 1.8
+        : isCommodity ? 1.1 : 0.9;
+  const invalidationPct = isCommodity ? 2.8 : 2.1;
+  const tp1Pct = isCommodity ? 3.4 : 4.2;
+  const tp2Pct = isCommodity ? 6.1 : 7.6;
+
+  const watchLow = roundPrice(idea.priceNow * (1 - pullbackPct / 100));
+  const watchHigh = roundPrice(idea.priceNow * (1 + entryBufferPct / 100));
+  const breakoutTrigger = roundPrice(idea.priceNow * (1 + entryBufferPct / 100));
+  const invalidation = roundPrice(idea.priceNow * (1 - invalidationPct / 100));
+  const tp1 = roundPrice(idea.priceNow * (1 + tp1Pct / 100));
+  const tp2 = roundPrice(idea.priceNow * (1 + tp2Pct / 100));
+  const downsideTrigger = roundPrice(idea.priceNow * (1 - entryBufferPct / 100));
+  const defensiveTarget = roundPrice(idea.priceNow * (1 - (isCommodity ? 3.1 : 4.1) / 100));
+
+  let planMode = "Najpierw obserwuj";
+  let scenarioA = "Jesli rynek obroni biezaca strefe i zamknie sesje mocniej, temat wraca do gry jako kandydat do wejscia.";
+  let scenarioB = "Jesli rynek straci strefe obserwacji, lepiej odpuscic i poczekac na nowa baze albo reset ruchu.";
+  let riskTemplate = "Ryzyko trzymaj raczej male: wejscie dopiero po potwierdzeniu, bez gonienia pierwszej swiecy.";
+
+  if (idea.actionBias === "momentum") {
+    planMode = "Scenariusz wybicia";
+    scenarioA = "Jesli rynek przebije lokalny szczyt i utrzyma impet, to jest zagranie na kontynuacje ruchu.";
+    scenarioB = "Jesli po wybiciu rynek szybko cofnie sie pod trigger, momentum slabnie i warto odpuscic.";
+    riskTemplate = "Na momentum nie zwiekszaj pozycji od razu. Najpierw maly rozmiar i szybkie przejscie na break even po pierwszym ruchu.";
+  } else if (idea.actionBias === "buy-on-pullback") {
+    planMode = "Scenariusz cofniecia";
+    scenarioA = "Jesli cofniecie zatrzyma sie w strefie obserwacji i pojawi sie obrona, to jest lepszy moment niz kupowanie po goracej swiecy.";
+    scenarioB = "Jesli cofniecie zamienia sie w dalszy zjazd, znaczy ze przewaga kupujacych jeszcze nie wrocila.";
+    riskTemplate = "Przy cofnieciu pilnuj invalidation. To ma byc zagranie na obrone trendu, nie lapanie spadajacego noza.";
+  } else if (idea.actionBias === "trim-risk") {
+    planMode = "Scenariusz wysokiej zmiennosci";
+    scenarioA = "Jesli rynek tylko odpocznie i wraca powyzej triggera, temat dalej jest mocny, ale wejscie musi byc mniejsze niz zwykle.";
+    scenarioB = "Jesli rynek nie utrzyma biezacej strefy, po takim pionowym ruchu cofniecie moze byc bardzo szybkie.";
+    riskTemplate = "To jest rynek newsowy. Nie gon ruchu i nie trzymaj bez planu invalidation.";
+  }
+
+  return {
+    ...idea,
+    watchLow,
+    watchHigh,
+    breakoutTrigger,
+    invalidation,
+    tp1,
+    tp2,
+    downsideTrigger,
+    defensiveTarget,
+    planMode,
+    scenarioA,
+    scenarioB,
+    riskTemplate
+  };
 }
 
 function polarToCartesian(cx: number, cy: number, radius: number, angleInDegrees: number) {
@@ -240,6 +455,186 @@ function AccountsBarChart({
           );
         })}
       </div>
+    </div>
+  );
+}
+
+function OilCandlesChart({
+  setup,
+  interval,
+  onIntervalChange,
+  plan
+}: {
+  setup: TradeSetupResponse;
+  interval: "15m" | "30m" | "1h";
+  onIntervalChange: (interval: "15m" | "30m" | "1h") => void;
+  plan: TradeSetupResponse["atrPlan"];
+}) {
+  const hostRef = useRef<HTMLDivElement | null>(null);
+  const tooltipRef = useRef<HTMLDivElement | null>(null);
+  const [chartError, setChartError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!hostRef.current || !setup.candles.length) {
+      return;
+    }
+    setChartError(null);
+
+    let chart: ReturnType<typeof createChart> | null = null;
+    let resizeObserver: ResizeObserver | null = null;
+
+    try {
+      chart = createChart(hostRef.current, {
+        width: Math.max(hostRef.current.clientWidth, 320),
+        height: 380,
+        layout: {
+          background: { type: ColorType.Solid, color: "#f8fbfd" },
+          textColor: "#405263"
+        },
+        grid: {
+          vertLines: { color: "rgba(23, 34, 45, 0.06)" },
+          horzLines: { color: "rgba(23, 34, 45, 0.06)" }
+        },
+        rightPriceScale: {
+          borderColor: "rgba(23, 34, 45, 0.08)"
+        },
+        timeScale: {
+          borderColor: "rgba(23, 34, 45, 0.08)",
+          timeVisible: true
+        },
+        localization: {
+          locale: "pl-PL",
+          timeFormatter: (time) => {
+            const timestamp = typeof time === "number" ? time * 1000 : Date.now();
+            return new Date(timestamp).toLocaleString("pl-PL", {
+              day: "2-digit",
+              month: "2-digit",
+              hour: "2-digit",
+              minute: "2-digit"
+            });
+          }
+        },
+        crosshair: {
+          vertLine: { labelBackgroundColor: "#163449" },
+          horzLine: { labelBackgroundColor: "#163449" }
+        }
+      });
+
+      const candleSeries = chart.addSeries(CandlestickSeries, {
+        upColor: "#0d7a48",
+        downColor: "#b54c31",
+        borderVisible: false,
+        wickUpColor: "#0d7a48",
+        wickDownColor: "#b54c31"
+      });
+
+      candleSeries.setData(
+        setup.candles.map((candle) => ({
+          time: Math.floor(new Date(candle.timestamp).getTime() / 1000) as never,
+          open: candle.open,
+          high: candle.high,
+          low: candle.low,
+          close: candle.close
+        }))
+      );
+
+      [
+        { title: "Watch low", value: setup.watchZoneLow, color: "rgba(22, 52, 73, 0.45)" },
+        { title: "Watch high", value: setup.watchZoneHigh, color: "rgba(22, 52, 73, 0.45)" },
+        { title: "Entry", value: plan.entry, color: "rgba(13, 122, 72, 0.72)" },
+        { title: "Breakout", value: setup.breakoutTrigger, color: "rgba(13, 122, 72, 0.52)" },
+        { title: "Breakdown", value: setup.breakdownTrigger, color: "rgba(181, 76, 49, 0.52)" },
+        { title: "SL", value: plan.sl, color: "rgba(181, 76, 49, 0.72)" },
+        { title: "TP1", value: plan.tp1, color: "rgba(192, 122, 51, 0.82)" },
+        { title: "TP2", value: plan.tp2, color: "rgba(192, 122, 51, 0.62)" }
+      ].forEach((line) => {
+        candleSeries.createPriceLine({
+          price: line.value,
+          color: line.color,
+          lineWidth: 2,
+          lineStyle: 2,
+          axisLabelVisible: true,
+          title: line.title
+        });
+      });
+
+      if (typeof ResizeObserver !== "undefined") {
+        resizeObserver = new ResizeObserver((entries) => {
+          const entry = entries[0];
+          if (entry && chart) {
+            chart.applyOptions({ width: Math.max(entry.contentRect.width, 320) });
+          }
+        });
+        resizeObserver.observe(hostRef.current);
+      }
+
+      chart.subscribeCrosshairMove((param) => {
+        if (!tooltipRef.current) {
+          return;
+        }
+        if (!param.point || !param.time || !param.seriesData.size) {
+          tooltipRef.current.style.display = "none";
+          return;
+        }
+        const candle = param.seriesData.get(candleSeries) as { open: number; high: number; low: number; close: number } | undefined;
+        if (!candle) {
+          tooltipRef.current.style.display = "none";
+          return;
+        }
+
+        const rawTime = typeof param.time === "number" ? param.time * 1000 : Date.now();
+        tooltipRef.current.style.display = "block";
+        tooltipRef.current.style.left = `${param.point.x + 14}px`;
+        tooltipRef.current.style.top = `${param.point.y + 14}px`;
+        tooltipRef.current.innerHTML = [
+          `<strong>${new Date(rawTime).toLocaleString("pl-PL", { hour: "2-digit", minute: "2-digit", day: "2-digit", month: "2-digit" })}</strong>`,
+          `O: ${fmtQuote(candle.open)}`,
+          `H: ${fmtQuote(candle.high)}`,
+          `L: ${fmtQuote(candle.low)}`,
+          `C: ${fmtQuote(candle.close)}`
+        ].join("<br/>");
+      });
+
+      chart.timeScale().fitContent();
+    } catch (error) {
+      setChartError(error instanceof Error ? error.message : "Nie udalo sie narysowac wykresu.");
+    }
+
+    return () => {
+      resizeObserver?.disconnect();
+      chart?.remove();
+    };
+  }, [plan, setup]);
+
+  return (
+    <div className="chart-panel trade-chart-panel">
+      <div className="panel-head">
+        <div>
+          <p className="kicker">Chart</p>
+          <h3>{setup.instrumentLabel} candles + poziomy setupu</h3>
+        </div>
+        <div className="chart-toolbar">
+          <div className="interval-toggle" role="tablist" aria-label="Interwal wykresu">
+            {(["15m", "30m", "1h"] as const).map((option) => (
+              <button
+                key={option}
+                type="button"
+                className={interval === option ? "interval-chip active" : "interval-chip"}
+                onClick={() => onIntervalChange(option)}
+              >
+                {option}
+              </button>
+            ))}
+          </div>
+          <span className="badge subtle">range 1d</span>
+        </div>
+      </div>
+      {!setup.candles.length ? <p className="muted">Brak swiec z feedu na ten moment.</p> : null}
+      <div className="interactive-chart-shell">
+        <div ref={hostRef} className="trade-chart-host" />
+        <div ref={tooltipRef} className="trade-chart-tooltip" />
+      </div>
+      {chartError ? <p className="negative">{chartError}</p> : null}
     </div>
   );
 }
@@ -492,17 +887,29 @@ function AccountOverview({
 export function App() {
   const [data, setData] = useState<DashboardResponse | null>(null);
   const [view, setView] = useState<ViewName>("today");
+  const [marketScan, setMarketScan] = useState<MarketScanItem[]>([]);
+  const [marketScanLoading, setMarketScanLoading] = useState(false);
+  const [marketScanError, setMarketScanError] = useState<string | null>(null);
+  const [tradeSetup, setTradeSetup] = useState<TradeSetupResponse | null>(null);
+  const [tradeInstrument, setTradeInstrument] = useState<
+    "WTI" | "BRENT" | "GOLD" | "NASDAQ" | "ETF_ENERGY" | "ETF_MSCI_ACWI" | "MSCI_WORLD" | "NVIDIA"
+  >("WTI");
+  const [tradeInterval, setTradeInterval] = useState<"15m" | "30m" | "1h">("15m");
+  const [tradePlanMode, setTradePlanMode] = useState<"atr" | "structure">("structure");
+  const [investmentAmount, setInvestmentAmount] = useState("3000");
+  const [positionInput, setPositionInput] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [tradeSetupError, setTradeSetupError] = useState<string | null>(null);
+  const [tradeSetupLoading, setTradeSetupLoading] = useState(false);
   const [csvText, setCsvText] = useState(
     "accountName,symbol,tradeDate,type,quantity,price,fees,currency\nIKE długoterminowe,VWCE,2026-03-15,BUY,1,445.2,2.3,EUR"
   );
-  const [xtbPath, setXtbPath] = useState(
-    "C:\\Users\\tomas\\Downloads\\51101461_2006-01-01_2026-03-28\\51101461\\PLN_51101461_2006-01-01_2026-03-28.xlsx"
-  );
-  const [emaklerIkePath, setEmaklerIkePath] = useState("C:\\Users\\tomas\\Downloads\\eMAKLER_historia_transakcji (2).Csv");
-  const [emaklerIkzePath, setEmaklerIkzePath] = useState("C:\\Users\\tomas\\Downloads\\eMAKLER_historia_transakcji (3).Csv");
-  const [treasuryBondsPath, setTreasuryBondsPath] = useState("C:\\Users\\tomas\\Downloads\\StanRachunkuRejestrowego_2026-03-29.xls");
+  const [xtbFile, setXtbFile] = useState<File | null>(null);
+  const [emaklerIkeFile, setEmaklerIkeFile] = useState<File | null>(null);
+  const [emaklerIkzeFile, setEmaklerIkzeFile] = useState<File | null>(null);
+  const [treasuryBondsFile, setTreasuryBondsFile] = useState<File | null>(null);
   const [importMessage, setImportMessage] = useState("");
+  const [activeImportKey, setActiveImportKey] = useState<string | null>(null);
   const [holdingForm, setHoldingForm] = useState(initialHoldingForm);
   const [watchlistForm, setWatchlistForm] = useState(initialWatchlistForm);
   const [actionMessage, setActionMessage] = useState("");
@@ -537,9 +944,73 @@ export function App() {
     }
   }
 
+  async function loadTradeSetup(instrument = tradeInstrument, interval = tradeInterval) {
+    try {
+      setTradeSetupLoading(true);
+      setTradeSetupError(null);
+      const response = await fetch(`/api/trade-setup?instrument=${encodeURIComponent(instrument)}&interval=${encodeURIComponent(interval)}`);
+      const json = await response.json();
+      if (!response.ok) {
+        throw new Error(json.message ?? "Nie udalo sie pobrac trade setupu.");
+      }
+      setTradeSetup(json as TradeSetupResponse);
+    } catch (err) {
+      setTradeSetup(null);
+      setTradeSetupError(err instanceof Error ? err.message : "Nieznany blad.");
+    } finally {
+      setTradeSetupLoading(false);
+    }
+  }
+
+  async function loadMarketScan() {
+    try {
+      setMarketScanLoading(true);
+      setMarketScanError(null);
+      const response = await fetch("/api/market/scan");
+      const json = await response.json();
+      if (!response.ok) {
+        throw new Error(json.message ?? "Nie udalo sie pobrac market radaru.");
+      }
+      setMarketScan(Array.isArray(json) ? (json as MarketScanItem[]) : []);
+    } catch (err) {
+      setMarketScan([]);
+      setMarketScanError(err instanceof Error ? err.message : "Nieznany blad.");
+    } finally {
+      setMarketScanLoading(false);
+    }
+  }
+
   useEffect(() => {
     void loadDashboard();
+    void loadMarketScan();
   }, []);
+
+  useEffect(() => {
+    if (view !== "trade-setup") {
+      return;
+    }
+    const interval = window.setInterval(() => {
+      void loadTradeSetup();
+    }, 60000);
+    return () => window.clearInterval(interval);
+  }, [view, tradeInstrument, tradeInterval]);
+
+  useEffect(() => {
+    if (view === "trade-setup") {
+      void loadTradeSetup(tradeInstrument, tradeInterval);
+    }
+  }, [tradeInstrument, tradeInterval, view]);
+
+  useEffect(() => {
+    if (view !== "market-radar") {
+      return;
+    }
+    void loadMarketScan();
+    const interval = window.setInterval(() => {
+      void loadMarketScan();
+    }, 120000);
+    return () => window.clearInterval(interval);
+  }, [view]);
 
   const derived = useMemo(() => {
     if (!data) {
@@ -622,6 +1093,63 @@ export function App() {
     };
   }, [data]);
 
+  const tradeDerived = useMemo(() => {
+    if (!tradeSetup) {
+      return null;
+    }
+
+    const activePlan = tradePlanMode === "atr" ? tradeSetup.atrPlan : tradeSetup.structurePlan;
+    const capital = Number(investmentAmount.replace(",", "."));
+    const rawPositionSize = Number(positionInput.replace(",", "."));
+    const validCapital = Number.isFinite(capital) && capital > 0 ? capital : 0;
+    const notionalPerUnitPln = tradeSetup.price * tradeSetup.fxRateToPln * tradeSetup.contractSize;
+    const marginPerUnitPln = tradeSetup.isLeveraged ? notionalPerUnitPln / tradeSetup.leverage : notionalPerUnitPln;
+    const positionSize =
+      Number.isFinite(rawPositionSize) && rawPositionSize > 0
+        ? rawPositionSize
+        : validCapital > 0 && marginPerUnitPln > 0
+          ? validCapital / marginPerUnitPln
+          : 0;
+    const clampedPositionSize = Math.min(
+      tradeSetup.maxPositionSize,
+      Math.max(positionSize, positionSize > 0 ? tradeSetup.minPositionSize : 0)
+    );
+    const inferredCapital = clampedPositionSize * marginPerUnitPln;
+    const riskPerUnitPln = Math.abs(activePlan.entry - activePlan.sl) * tradeSetup.contractSize * tradeSetup.fxRateToPln;
+    const tp1PerUnitPln = Math.abs(activePlan.tp1 - activePlan.entry) * tradeSetup.contractSize * tradeSetup.fxRateToPln;
+    const tp2PerUnitPln = Math.abs(activePlan.tp2 - activePlan.entry) * tradeSetup.contractSize * tradeSetup.fxRateToPln;
+    const swapPerUnitQuote =
+      activePlan.direction === "LONG"
+        ? tradeSetup.swapLongPerLotPerDay ?? 0
+        : tradeSetup.swapShortPerLotPerDay ?? 0;
+    const swapPerUnitPln = swapPerUnitQuote * tradeSetup.fxRateToPln;
+    const warnings: string[] = [];
+
+    if (Number.isFinite(rawPositionSize) && rawPositionSize > 0 && rawPositionSize < tradeSetup.minPositionSize) {
+      warnings.push(`Minimalna wielkosc pozycji dla ${tradeSetup.instrumentLabel} to ${tradeSetup.minPositionSize} ${tradeSetup.sizingLabel}.`);
+    }
+    if (Number.isFinite(rawPositionSize) && rawPositionSize > tradeSetup.maxPositionSize) {
+      warnings.push(`Maksymalna wielkosc pozycji dla ${tradeSetup.instrumentLabel} to ${tradeSetup.maxPositionSize} ${tradeSetup.sizingLabel}.`);
+    }
+    if (validCapital > 0 && validCapital < marginPerUnitPln * tradeSetup.minPositionSize) {
+      warnings.push(`Wpisany depozyt nie pokrywa minimalnej pozycji ${tradeSetup.minPositionSize} ${tradeSetup.sizingLabel}.`);
+    }
+
+    return {
+      activePlan,
+      capital: inferredCapital,
+      positionSize: clampedPositionSize,
+      riskPln: riskPerUnitPln * clampedPositionSize,
+      tp1ProfitPln: tp1PerUnitPln * clampedPositionSize,
+      tp2ProfitPln: tp2PerUnitPln * clampedPositionSize,
+      unitNotionalPln: notionalPerUnitPln,
+      unitMarginPln: marginPerUnitPln,
+      nominalExposurePln: notionalPerUnitPln * clampedPositionSize,
+      swapPerDayPln: swapPerUnitPln * clampedPositionSize,
+      warnings
+    };
+  }, [investmentAmount, positionInput, tradePlanMode, tradeSetup]);
+
   async function handleImport() {
     const response = await fetch("/api/import/csv", {
       method: "POST",
@@ -640,38 +1168,44 @@ export function App() {
   }
 
   async function handleXtbImport() {
-    const response = await fetch("/api/import/xtb-path", {
+    if (!xtbFile) {
+      setImportMessage("Najpierw wybierz plik XTB.");
+      return;
+    }
+    setActiveImportKey("xtb");
+    const formData = new FormData();
+    formData.append("file", xtbFile);
+    const response = await fetch("/api/import/xtb-upload", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        filePath: xtbPath,
-        accountName: "XTB"
-      })
+      body: formData
     });
     const json = await response.json();
+    setActiveImportKey(null);
     if (!response.ok) {
       setImportMessage(json.errors?.join(" ") ?? json.message ?? "XTB import failed.");
       return;
     }
     setImportMessage(`XTB import: imported ${json.imported}, skipped ${json.skipped}. ${json.notes?.join(" ") ?? ""}`);
+    setXtbFile(null);
     await loadDashboard();
   }
 
   async function handleEmaklerImport(accountName: "IKE" | "IKZE") {
-    const filePath = accountName === "IKE" ? emaklerIkePath : emaklerIkzePath;
-    const response = await fetch("/api/import/emakler-path", {
+    const file = accountName === "IKE" ? emaklerIkeFile : emaklerIkzeFile;
+    if (!file) {
+      setImportMessage(`Najpierw wybierz plik eMakler dla ${accountName}.`);
+      return;
+    }
+    setActiveImportKey(`emakler-${accountName.toLowerCase()}`);
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("accountName", accountName);
+    const response = await fetch("/api/import/emakler-upload", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        filePath,
-        accountName
-      })
+      body: formData
     });
     const json = await response.json();
+    setActiveImportKey(null);
     if (!response.ok) {
       setImportMessage(json.errors?.join(" ") ?? json.message ?? `eMakler import failed for ${accountName}.`);
       return;
@@ -683,6 +1217,11 @@ export function App() {
         refreshJson.message ?? ""
       }`
     );
+    if (accountName === "IKE") {
+      setEmaklerIkeFile(null);
+    } else {
+      setEmaklerIkzeFile(null);
+    }
     await loadDashboard();
   }
 
@@ -694,21 +1233,25 @@ export function App() {
   }
 
   async function handleTreasuryBondsImport() {
-    const response = await fetch("/api/import/treasury-bonds-path", {
+    if (!treasuryBondsFile) {
+      setImportMessage("Najpierw wybierz plik z obligacjami.");
+      return;
+    }
+    setActiveImportKey("treasury");
+    const formData = new FormData();
+    formData.append("file", treasuryBondsFile);
+    const response = await fetch("/api/import/treasury-bonds-upload", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        filePath: treasuryBondsPath
-      })
+      body: formData
     });
     const json = await response.json();
+    setActiveImportKey(null);
     if (!response.ok) {
       setImportMessage(json.errors?.join(" ") ?? json.message ?? "Treasury Bonds import failed.");
       return;
     }
     setImportMessage(`Obligacje Skarbowe: ${json.imported} pozycji, pominieto ${json.skipped}. ${json.notes?.join(" ") ?? ""}`);
+    setTreasuryBondsFile(null);
     await loadDashboard();
   }
 
@@ -744,6 +1287,31 @@ export function App() {
     const json = await response.json();
     setRefreshMessage(json.message ?? "Refresh finished.");
     await loadDashboard();
+  }
+
+  async function handleRefreshTradeSetup() {
+    await loadTradeSetup(tradeInstrument, tradeInterval);
+    await loadDashboard();
+  }
+
+  function handleInvestmentAmountChange(value: string) {
+    setInvestmentAmount(value);
+    setPositionInput("");
+  }
+
+  function handlePositionInputChange(value: string) {
+    setPositionInput(value);
+    if (!tradeSetup) {
+      return;
+    }
+    const parsed = Number(value.replace(",", "."));
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      return;
+    }
+    const unitNotional = tradeSetup.price * tradeSetup.fxRateToPln * tradeSetup.contractSize;
+    const unitMargin = tradeSetup.isLeveraged ? unitNotional / tradeSetup.leverage : unitNotional;
+    const capital = parsed * unitMargin;
+    setInvestmentAmount(capital.toFixed(0));
   }
 
   async function handleAddHolding(event: FormEvent<HTMLFormElement>) {
@@ -883,6 +1451,8 @@ export function App() {
       <nav className="tabs" aria-label="Main views">
         <button className={view === "today" ? "tab active" : "tab"} onClick={() => setView("today")}>Today</button>
         <button className={view === "portfolio" ? "tab active" : "tab"} onClick={() => setView("portfolio")}>Portfolio</button>
+        <button className={view === "market-radar" ? "tab active" : "tab"} onClick={() => setView("market-radar")}>Market Radar</button>
+        <button className={view === "trade-setup" ? "tab active" : "tab"} onClick={() => setView("trade-setup")}>Trade Setup</button>
         <button className={view === "watchlist" ? "tab active" : "tab"} onClick={() => setView("watchlist")}>Watchlist</button>
       </nav>
 
@@ -1118,6 +1688,403 @@ export function App() {
         </section>
       ) : null}
 
+      {view === "market-radar" ? (
+        <section className="stack">
+          <section className="panel">
+            <div className="panel-head">
+              <div>
+                <p className="kicker">Scanner</p>
+                <h2>Market Radar</h2>
+              </div>
+              <button className="secondary-button" onClick={() => void loadMarketScan()}>Refresh scan</button>
+            </div>
+            <p className="muted">
+              Skan rynku szuka przewag na bazie momentum `1h / 1d`, ATR i breakoutow. To jest shortlista tematow do obserwacji, nie gotowe zlecenia.
+            </p>
+            {marketScanLoading ? <p className="muted">Ladowanie market radaru...</p> : null}
+            {marketScanError ? <p className="negative">{marketScanError}</p> : null}
+            {!marketScanLoading && !marketScanError ? (
+              <div className="trade-setup-summary">
+                <article className="trade-summary-card">
+                  <span className="summary-label">WATCH LONG</span>
+                  <strong>{marketScan.filter((item) => item.signal === "WATCH LONG").length}</strong>
+                  <small>tematy z przewaga po stronie wzrostowej</small>
+                </article>
+                <article className="trade-summary-card">
+                  <span className="summary-label">WATCH SHORT</span>
+                  <strong>{marketScan.filter((item) => item.signal === "WATCH SHORT").length}</strong>
+                  <small>tematy z przewaga po stronie slabosci</small>
+                </article>
+                <article className="trade-summary-card">
+                  <span className="summary-label">HIGH strength</span>
+                  <strong>{marketScan.filter((item) => item.strength === "HIGH").length}</strong>
+                  <small>najmocniejsze wskazania ze skanera</small>
+                </article>
+              </div>
+            ) : null}
+          </section>
+
+          <section className="opportunity-grid">
+            {marketScan.map((item) => (
+              <article key={item.asset} className="opportunity-card market-radar-card">
+                <div className="alert-header">
+                  <strong>{item.label}</strong>
+                  <span className="badge subtle">{item.assetClass}</span>
+                </div>
+                <div className="opportunity-header-row">
+                  <span className={marketSignalClass(item.signal)}>{item.signal}</span>
+                  <span className={strengthClass(item.strength)}>{item.strength}</span>
+                </div>
+                <div className="opportunity-metrics">
+                  <div className="opportunity-metric">
+                    <span>Cena</span>
+                    <strong>{fmtQuote(item.priceNow)} {item.quoteCurrency}</strong>
+                  </div>
+                  <div className="opportunity-metric">
+                    <span>1H</span>
+                    <strong className={item.change1hPct >= 0 ? "positive" : "negative"}>{fmtSignedPct(item.change1hPct)}</strong>
+                  </div>
+                  <div className="opportunity-metric">
+                    <span>1D</span>
+                    <strong className={item.change1dPct >= 0 ? "positive" : "negative"}>{fmtSignedPct(item.change1dPct)}</strong>
+                  </div>
+                </div>
+                <p><strong>ATR:</strong> {fmtQuote(item.atr)} {item.quoteCurrency}</p>
+                <p><strong>Breakout:</strong> {item.breakout === "up" ? "wybicie w gore" : item.breakout === "down" ? "wybicie w dol" : "brak"}</p>
+                <p><strong>Powod:</strong> {item.reason}</p>
+                <p><strong>Ryzyko:</strong> {item.riskNote}</p>
+                <p className="meta-line">Score {item.score} · source {item.source} · {fmtDateTime(item.updatedAt)}</p>
+              </article>
+            ))}
+          </section>
+        </section>
+      ) : null}
+
+      {view === "trade-setup" ? (
+        <section className="stack">
+          <section className="panel trade-setup-hero">
+            <div className="panel-head">
+              <div>
+                <p className="kicker">Trade setup</p>
+                <h2>{tradeSetup?.title ?? "Trade setup"}</h2>
+              </div>
+              <button className="secondary-button" onClick={handleRefreshTradeSetup}>Refresh setup</button>
+            </div>
+            <div className="trade-controls">
+              <label>
+                Instrument
+                <select value={tradeInstrument} onChange={(event) => setTradeInstrument(event.target.value as typeof tradeInstrument)}>
+                  <option value="WTI">WTI</option>
+                  <option value="BRENT">Brent</option>
+                  <option value="GOLD">Zloto</option>
+                  <option value="NASDAQ">Nasdaq / QQQ</option>
+                  <option value="ETF_ENERGY">ETF Energy</option>
+                  <option value="ETF_MSCI_ACWI">ETF MSCI ACWI</option>
+                  <option value="MSCI_WORLD">MSCI World</option>
+                  <option value="NVIDIA">Nvidia</option>
+                </select>
+              </label>
+              <label>
+                Interwal
+                <select value={tradeInterval} onChange={(event) => setTradeInterval(event.target.value as typeof tradeInterval)}>
+                  <option value="15m">15m</option>
+                  <option value="30m">30m</option>
+                  <option value="1h">1h</option>
+                </select>
+              </label>
+            </div>
+            <p className="muted">
+              To nie jest automat od klikniecia `buy/sell`, tylko scenariusz do szybkiej oceny rynku.
+            </p>
+            {tradeSetup ? (
+              <div className="trade-data-meta">
+                <span className={`badge ${tradeSetup.marketDataMode === "live" ? "" : "subtle"}`}>Tryb danych: {tradeSetup.marketDataMode}</span>
+                <span className="badge subtle">Zrodlo: {tradeSetup.source}</span>
+                <span className="badge subtle">Ostatnia aktualizacja: {fmtDateTime(tradeSetup.updatedAt)}</span>
+              </div>
+            ) : null}
+
+            {tradeSetupLoading ? <p className="muted">Ladowanie setupu...</p> : null}
+            {tradeSetupError ? <p className="negative">{tradeSetupError}</p> : null}
+            {!tradeSetupLoading && !tradeSetupError && !tradeSetup ? (
+              <p className="muted">Brak danych setupu dla wybranego instrumentu.</p>
+            ) : null}
+
+            {tradeSetup ? <div className="trade-setup-summary">
+              <article className="trade-summary-card trade-price-card">
+                <span className="summary-label">Aktualny kurs</span>
+                <strong>{fmtQuote(tradeSetup.price)} {tradeSetup.quoteCurrency}</strong>
+                <small className={tradeSetup.dayChangePct >= 0 ? "positive" : "negative"}>
+                  {fmtSignedPct(tradeSetup.dayChangePct)} dzisiaj
+                </small>
+              </article>
+              <article className="trade-summary-card">
+                <span className="summary-label">SIGNAL</span>
+                <strong className={preferredActionClass(tradeSetup.signal)}>{tradeSetup.signal}</strong>
+                <small>{tradeSetup.tradeInvalid ? "Trade invalid" : preferredActionLabel(tradeSetup.signal)}</small>
+              </article>
+              <article className="trade-summary-card">
+                <span className="summary-label">Przewaga</span>
+                <strong className={preferredActionClass(tradeSetup.preferredAction)}>{preferredActionLabel(tradeSetup.preferredAction)}</strong>
+                <small>{tradeSetup.setupType}</small>
+              </article>
+              <article className="trade-summary-card">
+                <span className="summary-label">Setup quality</span>
+                <strong className={setupQualityClass(tradeSetup.setupQuality)}>{tradeSetup.setupQuality}</strong>
+                <small>na bazie momentum, ruchu dnia i struktury</small>
+              </article>
+              <article className="trade-summary-card">
+                <span className="summary-label">ATR</span>
+                <strong>{fmtQuote(tradeSetup.atr)} {tradeSetup.quoteCurrency}</strong>
+                <small>miara biezacej zmiennosci dla wybranego interwalu</small>
+              </article>
+            </div> : null}
+            {tradeSetup?.tradeInvalid ? (
+              <div className="trade-invalid-banner">
+                <strong>Trade invalid</strong>
+                <p>{tradeSetup.invalidReason}</p>
+              </div>
+            ) : null}
+          </section>
+
+          {tradeSetup ? <section className="grid dashboard-grid">
+            <div className="panel">
+              <div className="panel-head">
+                <div>
+                  <p className="kicker">Plan</p>
+                  <h2>Scenariusz A / B</h2>
+                </div>
+              </div>
+              <div className="trade-plan-toggle">
+                <button className={tradePlanMode === "atr" ? "interval-chip active" : "interval-chip"} onClick={() => setTradePlanMode("atr")}>ATR-based plan</button>
+                <button className={tradePlanMode === "structure" ? "interval-chip active" : "interval-chip"} onClick={() => setTradePlanMode("structure")}>Structure-based plan</button>
+              </div>
+              <div className="trade-setup-grid">
+                <article className="trade-card">
+                  <div className="trade-card-head">
+                    <span className="badge">A</span>
+                    <strong>Jesli rynek potwierdza setup</strong>
+                  </div>
+                  <p>{tradeSetup.scenarioA}</p>
+                </article>
+                <article className="trade-card">
+                  <div className="trade-card-head">
+                    <span className="badge subtle">B</span>
+                    <strong>Jesli rynek zaneguje uklad</strong>
+                  </div>
+                  <p>{tradeSetup.scenarioB}</p>
+                </article>
+              </div>
+
+              <div className="trade-levels-grid">
+                <article className="trade-level-card">
+                  <span>Entry</span>
+                  <strong>{fmtQuote(tradeDerived?.activePlan.entry ?? tradeSetup.atrPlan.entry)} {tradeSetup.quoteCurrency}</strong>
+                </article>
+                <article className="trade-level-card">
+                  <span>Strefa obserwacji</span>
+                  <strong>{fmtQuote(tradeSetup.watchZoneLow)} - {fmtQuote(tradeSetup.watchZoneHigh)} {tradeSetup.quoteCurrency}</strong>
+                </article>
+                <article className="trade-level-card">
+                  <span>Poziom potwierdzenia long</span>
+                  <strong>{fmtQuote(tradeSetup.breakoutTrigger)} {tradeSetup.quoteCurrency}</strong>
+                </article>
+                <article className="trade-level-card">
+                  <span>Poziom potwierdzenia short</span>
+                  <strong>{fmtQuote(tradeSetup.breakdownTrigger)} {tradeSetup.quoteCurrency}</strong>
+                </article>
+                <article className="trade-level-card">
+                  <span>SL</span>
+                  <strong>{fmtQuote(tradeDerived?.activePlan.sl ?? tradeSetup.invalidation)} {tradeSetup.quoteCurrency}</strong>
+                </article>
+                <article className="trade-level-card">
+                  <span>TP1</span>
+                  <strong>{fmtQuote(tradeDerived?.activePlan.tp1 ?? tradeSetup.tp1)} {tradeSetup.quoteCurrency}</strong>
+                </article>
+                <article className="trade-level-card">
+                  <span>TP2</span>
+                  <strong>{fmtQuote(tradeDerived?.activePlan.tp2 ?? tradeSetup.tp2)} {tradeSetup.quoteCurrency}</strong>
+                </article>
+                <article className="trade-level-card">
+                  <span>Relacja zysk/ryzyko</span>
+                  <strong className={(tradeDerived?.activePlan.riskReward ?? tradeSetup.riskReward) >= tradeSetup.minAcceptedRR ? "positive" : "negative"}>
+                    {(tradeDerived?.activePlan.riskReward ?? tradeSetup.riskReward).toFixed(2)}R
+                  </strong>
+                  <small>minimum {tradeSetup.minAcceptedRR.toFixed(1)}R</small>
+                </article>
+              </div>
+              <div className="trade-plan-note">
+                <p><strong>{tradePlanMode === "atr" ? "ATR-based plan:" : "Structure-based plan:"}</strong> {tradePlanMode === "atr" ? tradeSetup.atrPlan.comment : tradeSetup.structurePlan.comment}</p>
+                {tradePlanMode === "structure" ? <p><strong>Podstawa:</strong> {tradeSetup.structurePlan.basis}</p> : null}
+              </div>
+            </div>
+
+            <div className="stack">
+              <div className="panel">
+                <div className="panel-head">
+                  <div>
+                    <p className="kicker">Sizing</p>
+                    <h2>Kalkulator pozycji</h2>
+                  </div>
+                </div>
+                <div className="trade-sizer">
+                  <div className="trade-sizer-inputs">
+                    <label>
+                      {tradeSetup.isLeveraged ? "Depozyt / margin" : "Kwota inwestycji"}
+                      <input
+                        type="number"
+                        min="0"
+                        step="100"
+                        value={investmentAmount}
+                        onChange={(event) => handleInvestmentAmountChange(event.target.value)}
+                      />
+                    </label>
+                    <label>
+                      {tradeSetup.sizingMode === "lots" ? "Loty" : "Liczba sztuk"}
+                      <input
+                        type="number"
+                        min="0"
+                        step={tradeSetup.sizingMode === "lots" ? "0.001" : "0.01"}
+                        value={positionInput}
+                        placeholder={tradeDerived ? tradeDerived.positionSize.toFixed(tradeSetup.sizingMode === "lots" ? 3 : 2) : "0"}
+                        onChange={(event) => handlePositionInputChange(event.target.value)}
+                      />
+                    </label>
+                  </div>
+                  <div className="trade-setup-grid">
+                    <article className="trade-card">
+                      <span className="summary-label">Szacowana wielkosc pozycji</span>
+                      <strong>{(tradeDerived?.positionSize ?? 0).toFixed(tradeSetup.sizingMode === "lots" ? 3 : 2)} {tradeSetup.sizingLabel}</strong>
+                      <small>
+                        {tradeSetup.isLeveraged
+                          ? `min ${tradeSetup.minPositionSize} / max ${tradeSetup.maxPositionSize} ${tradeSetup.sizingLabel}`
+                          : `na bazie kursu, FX i kontraktu ${tradeSetup.contractSize}`}
+                      </small>
+                    </article>
+                    <article className="trade-card">
+                      <span className="summary-label">{tradeSetup.isLeveraged ? "Ekspozycja nominalna" : "Wartosc pozycji"}</span>
+                      <strong>{fmtAmount(tradeDerived?.nominalExposurePln ?? 0)}</strong>
+                      <small>
+                        {tradeSetup.isLeveraged
+                          ? `1:${tradeSetup.leverage} dzwigni · 1 ${tradeSetup.sizingLabel} = ${fmtAmount(tradeDerived?.unitNotionalPln ?? 0)} nominalu`
+                          : `1 ${tradeSetup.sizingLabel} = ${fmtAmount(tradeDerived?.unitNotionalPln ?? 0)}`}
+                      </small>
+                    </article>
+                    <article className="trade-card">
+                      <span className="summary-label">{tradeSetup.isLeveraged ? "Wymagany margin %" : "Pokrycie kapitalem"}</span>
+                      <strong>{tradeSetup.requiredMarginPct}%</strong>
+                      <small>
+                        {tradeSetup.isLeveraged
+                          ? `depozyt liczony przy dzwigni 1:${tradeSetup.leverage}`
+                          : "brak dzwigni dla tego instrumentu"}
+                      </small>
+                    </article>
+                    <article className="trade-card">
+                      <span className="summary-label">Ryzyko do SL</span>
+                      <strong className="negative">{fmtSignedAmount(-(tradeDerived?.riskPln ?? 0))}</strong>
+                      <small>dla aktywnego planu {tradePlanMode === "atr" ? "ATR" : "Structure"}</small>
+                    </article>
+                    <article className="trade-card">
+                      <span className="summary-label">Potencjal TP1</span>
+                      <strong className="positive">{fmtSignedAmount(tradeDerived?.tp1ProfitPln ?? 0)}</strong>
+                      <small>przy realizacji pierwszego targetu</small>
+                    </article>
+                    <article className="trade-card">
+                      <span className="summary-label">Potencjal TP2</span>
+                      <strong className="positive">{fmtSignedAmount(tradeDerived?.tp2ProfitPln ?? 0)}</strong>
+                      <small>przy realizacji drugiego targetu</small>
+                    </article>
+                    <article className="trade-card">
+                      <span className="summary-label">Swap / dzien</span>
+                      <strong className={(tradeDerived?.swapPerDayPln ?? 0) <= 0 ? "negative" : "positive"}>
+                        {fmtSignedAmount(tradeDerived?.swapPerDayPln ?? 0)}
+                      </strong>
+                      <small>
+                        {tradeSetup.swapLongPerLotPerDay != null || tradeSetup.swapShortPerLotPerDay != null
+                          ? `${tradeDerived?.activePlan.direction === "LONG" ? "long" : "short"} · koszt utrzymania pozycji`
+                          : "brak swapu dla tego instrumentu"}
+                      </small>
+                    </article>
+                  </div>
+                  {tradeSetup.isLeveraged ? (
+                    <p className="muted">
+                      Dla CFD na {tradeSetup.instrumentLabel} kwota wejscia jest traktowana jako wymagany depozyt, nie pelny nominal pozycji.
+                      Kalkulator liczy ekspozycje przy dzwigni 1:{tradeSetup.leverage} i wartosci 1 lota = cena × {tradeSetup.contractSize}.
+                    </p>
+                  ) : null}
+                  {tradeDerived?.warnings.length ? (
+                    <div className="trade-warnings">
+                      {tradeDerived.warnings.map((warning) => (
+                        <p key={warning} className="negative">{warning}</p>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+
+              <div className="panel">
+                <div className="panel-head">
+                  <div>
+                    <p className="kicker">Execution</p>
+                    <h2>Jak to czytac teraz</h2>
+                  </div>
+                </div>
+                <div className="stack">
+                  <article className="context-item">
+                    <strong>Tryb rynku</strong>
+                    <p>{tradeSetup.setupType}</p>
+                  </article>
+                  <article className="context-item">
+                    <strong>Signal + quality</strong>
+                    <p>{tradeSetup.signal} · {tradeSetup.setupQuality}</p>
+                  </article>
+                  <article className="context-item">
+                    <strong>Risk note</strong>
+                    <p>{tradeSetup.riskNote}</p>
+                  </article>
+                  <article className="context-item">
+                    <strong>Execution note</strong>
+                    <p>{tradeSetup.executionNote}</p>
+                  </article>
+                </div>
+              </div>
+
+              <div className="panel">
+                <div className="panel-head">
+                  <div>
+                    <p className="kicker">Reading</p>
+                    <h2>Praktyczny odczyt</h2>
+                  </div>
+                </div>
+                <div className="stack">
+                  <article className="context-item">
+                    <strong>Jesli chcesz grac long</strong>
+                    <p>Patrz, czy cena utrzymuje sie nad {fmtQuote(tradeSetup.breakoutTrigger)} {tradeSetup.quoteCurrency} i nie oddaje ruchu od razu po wybiciu.</p>
+                  </article>
+                  <article className="context-item">
+                    <strong>Jesli chcesz grac short</strong>
+                    <p>Patrz, czy cena schodzi pod {fmtQuote(tradeSetup.breakdownTrigger)} {tradeSetup.quoteCurrency} i czy slabosc nie jest tylko chwilowym wybiciem stopow.</p>
+                  </article>
+                  <article className="context-item">
+                    <strong>Kiedy lepiej odpuscic</strong>
+                    <p>Gdy rynek siedzi w srodku strefy obserwacji i nie daje potwierdzenia. Wtedy przewaga zwykle jest za mala na dobry trade.</p>
+                  </article>
+                </div>
+              </div>
+            </div>
+          </section> : null}
+
+          {tradeSetup ? (
+            <OilCandlesChart
+              setup={tradeSetup}
+              interval={tradeInterval}
+              onIntervalChange={setTradeInterval}
+              plan={tradeDerived?.activePlan ?? tradeSetup.structurePlan}
+            />
+          ) : null}
+        </section>
+      ) : null}
+
       {view === "portfolio" ? (
         <section className="stack">
           <section className="panel">
@@ -1225,60 +2192,82 @@ export function App() {
                 </span>
               </summary>
               <section className="stack settings-grid">
-                <div className="import-sources-grid">
-                  <div className="emakler-import-card import-source-card">
-                    <div>
-                      <p className="kicker">Source 1</p>
-                      <strong>XTB</strong>
-                      <p className="muted">Workbook z historia transakcji i odbudowa aktualnych pozycji brokera.</p>
+                  <div className="import-sources-grid">
+                    <div className="emakler-import-card import-source-card">
+                      <div>
+                        <p className="kicker">Source 1</p>
+                        <strong>XTB</strong>
+                        <p className="muted">Workbook z historia transakcji i odbudowa aktualnych pozycji brokera.</p>
+                      </div>
+                      <FileDropzone
+                        label="Plik XLSX z historii XTB"
+                        accept=".xlsx,.xls"
+                        file={xtbFile}
+                        onFileSelect={setXtbFile}
+                      />
+                      <div className="row-actions">
+                        <button className="primary-button" onClick={handleXtbImport} disabled={activeImportKey === "xtb"}>
+                          {activeImportKey === "xtb" ? "Import trwa..." : "Importuj z XTB"}
+                        </button>
+                        <button className="secondary-button" onClick={handleSyncHoldings}>Przelicz pozycje</button>
+                      </div>
                     </div>
-                    <label>
-                      Sciezka do pliku XLSX
-                      <input value={xtbPath} onChange={(event) => setXtbPath(event.target.value)} />
-                    </label>
-                    <div className="row-actions">
-                      <button className="primary-button" onClick={handleXtbImport}>Importuj z XTB</button>
-                      <button className="secondary-button" onClick={handleSyncHoldings}>Przelicz pozycje</button>
-                    </div>
-                  </div>
 
-                  <div className="emakler-import-card import-source-card">
+                    <div className="emakler-import-card import-source-card">
                     <div>
-                      <p className="kicker">Source 2</p>
-                      <strong>eMakler mBank</strong>
-                      <p className="muted">Import historii transakcji dla IKE i IKZE z plikow CSV.</p>
+                        <p className="kicker">Source 2</p>
+                        <strong>eMakler mBank</strong>
+                        <p className="muted">Import historii transakcji dla IKE i IKZE z plikow CSV.</p>
+                      </div>
+                      <FileDropzone
+                        label="Plik CSV dla IKE"
+                        accept=".csv,.txt"
+                        file={emaklerIkeFile}
+                        onFileSelect={setEmaklerIkeFile}
+                      />
+                      <button
+                        className="secondary-button"
+                        onClick={() => void handleEmaklerImport("IKE")}
+                        disabled={activeImportKey === "emakler-ike"}
+                      >
+                        {activeImportKey === "emakler-ike" ? "Import IKE trwa..." : "Importuj IKE"}
+                      </button>
+                      <FileDropzone
+                        label="Plik CSV dla IKZE"
+                        accept=".csv,.txt"
+                        file={emaklerIkzeFile}
+                        onFileSelect={setEmaklerIkzeFile}
+                      />
+                      <button
+                        className="secondary-button"
+                        onClick={() => void handleEmaklerImport("IKZE")}
+                        disabled={activeImportKey === "emakler-ikze"}
+                      >
+                        {activeImportKey === "emakler-ikze" ? "Import IKZE trwa..." : "Importuj IKZE"}
+                      </button>
                     </div>
-                    <label>
-                      Sciezka do CSV IKE
-                      <input value={emaklerIkePath} onChange={(event) => setEmaklerIkePath(event.target.value)} />
-                    </label>
-                    <button className="secondary-button" onClick={() => void handleEmaklerImport("IKE")}>
-                      Importuj IKE
-                    </button>
-                    <label>
-                      Sciezka do CSV IKZE
-                      <input value={emaklerIkzePath} onChange={(event) => setEmaklerIkzePath(event.target.value)} />
-                    </label>
-                    <button className="secondary-button" onClick={() => void handleEmaklerImport("IKZE")}>
-                      Importuj IKZE
-                    </button>
-                  </div>
 
-                  <div className="emakler-import-card import-source-card">
-                    <div>
-                      <p className="kicker">Source 3</p>
-                      <strong>Obligacje Skarbowe</strong>
-                      <p className="muted">Import stanu rachunku rejestrowego z liczba obligacji, wartoscia i data wykupu.</p>
+                    <div className="emakler-import-card import-source-card">
+                      <div>
+                        <p className="kicker">Source 3</p>
+                        <strong>Obligacje Skarbowe</strong>
+                        <p className="muted">Import stanu rachunku rejestrowego z liczba obligacji, wartoscia i data wykupu.</p>
+                      </div>
+                      <FileDropzone
+                        label="Plik XLS lub XLSX obligacji"
+                        accept=".xlsx,.xls"
+                        file={treasuryBondsFile}
+                        onFileSelect={setTreasuryBondsFile}
+                      />
+                      <button
+                        className="secondary-button"
+                        onClick={handleTreasuryBondsImport}
+                        disabled={activeImportKey === "treasury"}
+                      >
+                        {activeImportKey === "treasury" ? "Import trwa..." : "Importuj obligacje"}
+                      </button>
                     </div>
-                    <label>
-                      Sciezka do pliku XLS lub XLSX
-                      <input value={treasuryBondsPath} onChange={(event) => setTreasuryBondsPath(event.target.value)} />
-                    </label>
-                    <button className="secondary-button" onClick={handleTreasuryBondsImport}>
-                      Importuj obligacje
-                    </button>
                   </div>
-                </div>
 
                 <details className="subsettings">
                   <summary>Mapowanie tickerow XTB</summary>

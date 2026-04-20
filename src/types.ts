@@ -109,10 +109,101 @@ export interface DashboardResponse {
   watchlist: WatchlistItem[];
 }
 
+export interface MarketScanItem {
+  asset: string;
+  label: string;
+  marketSymbol: string;
+  assetClass: string;
+  signal: "WATCH LONG" | "WATCH SHORT" | "AVOID";
+  strength: "HIGH" | "MEDIUM" | "LOW";
+  priceNow: number;
+  quoteCurrency: string;
+  change1hPct: number;
+  change1dPct: number;
+  atr: number;
+  breakout: "up" | "down" | "none";
+  score: number;
+  reason: string;
+  riskNote: string;
+  source: string;
+  updatedAt: string;
+}
+
 export interface InstrumentMapping {
   id: number;
   accountId: number | null;
   sourceSymbol: string;
   marketTicker: string;
   label: string | null;
+}
+
+export interface TradeSetupResponse {
+  instrument: string;
+  instrumentLabel: string;
+  interval: "15m" | "30m" | "1h";
+  title: string;
+  signal: "LONG" | "SHORT" | "WAIT";
+  setupQuality: "Wysoka" | "Srednia" | "Niska";
+  tradeInvalid: boolean;
+  invalidReason: string | null;
+  minAcceptedRR: number;
+  price: number;
+  quoteCurrency: string;
+  fxRateToPln: number;
+  dayChangePct: number;
+  momentum3mPct: number;
+  preferredAction: "LONG" | "SHORT" | "WAIT";
+  contractSize: number;
+  sizingMode: "lots" | "units";
+  sizingLabel: string;
+  isLeveraged: boolean;
+  leverage: number;
+  requiredMarginPct: number;
+  minPositionSize: number;
+  maxPositionSize: number;
+  swapLongPerLotPerDay: number | null;
+  swapShortPerLotPerDay: number | null;
+  atr: number;
+  setupType: string;
+  watchZoneLow: number;
+  watchZoneHigh: number;
+  breakoutTrigger: number;
+  breakdownTrigger: number;
+  invalidation: number;
+  tp1: number;
+  tp2: number;
+  riskReward: number;
+  scenarioA: string;
+  scenarioB: string;
+  riskNote: string;
+  executionNote: string;
+  source: string;
+  updatedAt: string;
+  marketDataMode: "live" | "fallback";
+  atrPlan: {
+    direction: "LONG" | "SHORT";
+    entry: number;
+    sl: number;
+    tp1: number;
+    tp2: number;
+    riskReward: number;
+    comment: string;
+  };
+  structurePlan: {
+    direction: "LONG" | "SHORT";
+    entry: number;
+    sl: number;
+    tp1: number;
+    tp2: number;
+    riskReward: number;
+    basis: string;
+    comment: string;
+  };
+  candles: Array<{
+    timestamp: string;
+    open: number;
+    high: number;
+    low: number;
+    close: number;
+  }>;
 }

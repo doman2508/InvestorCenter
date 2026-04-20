@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent, type FormEvent } from "react";
 import { CandlestickSeries, ColorType, createChart } from "lightweight-charts";
-import type { DashboardResponse, InstrumentMapping, MarketScanItem, TradeSetupResponse } from "./types";
+import type { DashboardResponse, InstrumentMapping, MarketScanItem, MonthlyPerformanceResponse, TradeSetupResponse } from "./types";
 
 type ViewName = "today" | "portfolio" | "market-radar" | "trade-setup" | "watchlist";
 type AssetClass = "ETF" | "STOCK" | "BOND" | "COMMODITY" | "CASH";
@@ -67,6 +67,23 @@ function fmtSignedAmount(value: number) {
 function fmtSignedPct(value: number) {
   const prefix = value > 0 ? "+" : "";
   return `${prefix}${fmtPct(value)}`;
+}
+
+type MonthlyRange = "6M" | "12M" | "YTD" | "ALL";
+
+function filterMonthlyPoints(
+  points: MonthlyPerformanceResponse["total"]["points"],
+  range: MonthlyRange
+) {
+  if (range === "ALL") {
+    return points;
+  }
+  if (range === "YTD") {
+    const currentYear = new Date().getFullYear();
+    return points.filter((point) => Number(point.month.slice(0, 4)) === currentYear);
+  }
+  const count = range === "6M" ? 6 : 12;
+  return points.slice(-count);
 }
 
 function fmtDate(value: string | null) {
@@ -459,6 +476,91 @@ function AccountsBarChart({
   );
 }
 
+function MonthlyValueChart({
+  points,
+  accent = "#216b72"
+}: {
+  points: MonthlyPerformanceResponse["total"]["points"];
+  accent?: string;
+  }) {
+    if (!points.length) {
+      return <p className="muted">Brak danych miesiecznych.</p>;
+    }
+
+    const visiblePoints = points;
+    const maxValue = Math.max(...visiblePoints.map((item) => item.value), 1);
+
+  return (
+    <div className="monthly-chart">
+        <div className="monthly-bars" style={{ gridTemplateColumns: `repeat(${Math.max(visiblePoints.length, 1)}, minmax(0, 1fr))` }}>
+          {visiblePoints.map((point) => (
+            <div key={point.month} className="monthly-bar-col">
+            <div
+              className="monthly-bar-fill"
+              style={{
+                height: `${Math.max((point.value / maxValue) * 100, 6)}%`,
+                background: `linear-gradient(180deg, ${accent}, rgba(192, 122, 51, 0.82))`
+              }}
+              title={`${point.label}: ${fmtAmount(point.value)}`}
+            />
+            <span>{point.label.slice(0, 5)}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function MonthlyMarker({
+  title,
+  points
+}: {
+  title: string;
+  points: MonthlyPerformanceResponse["total"]["points"];
+}) {
+  const latest = points[points.length - 1] ?? null;
+
+  return (
+    <div className="mini-stat monthly-marker-card">
+      <span>{title}</span>
+      <strong>{latest ? fmtAmount(latest.value) : "brak"}</strong>
+      <small className={latest && (latest.changeValue ?? 0) >= 0 ? "positive" : "negative"}>
+        {latest?.changeValue == null || latest.changePct == null
+          ? "Brak porownania miesiac do miesiaca"
+          : `${fmtSignedAmount(latest.changeValue)} · ${fmtSignedPct(latest.changePct)}`}
+      </small>
+    </div>
+  );
+}
+
+function EnhancedMonthlyMarker({
+  title,
+  points,
+  mode = "raw"
+}: {
+  title: string;
+  points: MonthlyPerformanceResponse["total"]["points"];
+  mode?: "raw" | "adjusted";
+}) {
+  const latest = points[points.length - 1] ?? null;
+  const changeValue = mode === "adjusted" ? latest?.flowAdjustedChangeValue ?? null : latest?.changeValue ?? null;
+  const changePct = mode === "adjusted" ? latest?.flowAdjustedChangePct ?? null : latest?.changePct ?? null;
+  const subtitle = mode === "adjusted" ? "Po oczyszczeniu z doplat i wyplat" : "Surowa zmiana miesiac do miesiaca";
+
+  return (
+    <div className="mini-stat monthly-marker-card">
+      <span>{title}</span>
+      <strong>{latest ? fmtAmount(latest.value) : "brak"}</strong>
+      <small className={changeValue != null && changeValue >= 0 ? "positive" : "negative"}>
+        {changeValue == null || changePct == null
+          ? "Brak porownania miesiac do miesiaca"
+          : `${fmtSignedAmount(changeValue)} · ${fmtSignedPct(changePct)}`}
+      </small>
+      <small className="muted">{subtitle}</small>
+    </div>
+  );
+}
+
 function OilCandlesChart({
   setup,
   interval,
@@ -786,6 +888,7 @@ function AccountOverview({
   title,
   kicker,
   account,
+  monthlyPoints,
   portfolioDayChangePct,
   showRefresh,
   onRefresh
@@ -793,6 +896,7 @@ function AccountOverview({
   title: string;
   kicker: string;
   account: DashboardResponse["portfolio"]["accounts"][number];
+  monthlyPoints?: MonthlyPerformanceResponse["total"]["points"];
   portfolioDayChangePct: number;
   showRefresh?: boolean;
   onRefresh?: () => void;
@@ -879,13 +983,33 @@ function AccountOverview({
             </div>
           );
         })}
-      </div>
-    </section>
-  );
-}
+        </div>
+
+        {monthlyPoints && monthlyPoints.length ? (
+          <div className="account-monthly-panel">
+            <div className="panel-head compact">
+              <div>
+                <p className="kicker">Monthly view</p>
+                <h3>Zmiana miesiac do miesiaca</h3>
+              </div>
+            </div>
+            <div className="account-monthly-grid">
+              <div className="stack monthly-markers-stack">
+                <EnhancedMonthlyMarker title="Koniec miesiaca" points={monthlyPoints} />
+                <EnhancedMonthlyMarker title="Koniec miesiaca" points={monthlyPoints} mode="adjusted" />
+              </div>
+              <MonthlyValueChart points={monthlyPoints} accent="#163449" />
+            </div>
+          </div>
+        ) : null}
+      </section>
+    );
+  }
 
 export function App() {
   const [data, setData] = useState<DashboardResponse | null>(null);
+  const [monthlyPerformance, setMonthlyPerformance] = useState<MonthlyPerformanceResponse | null>(null);
+  const [monthlyRange, setMonthlyRange] = useState<MonthlyRange>("12M");
   const [view, setView] = useState<ViewName>("today");
   const [marketScan, setMarketScan] = useState<MarketScanItem[]>([]);
   const [marketScanLoading, setMarketScanLoading] = useState(false);
@@ -939,8 +1063,21 @@ export function App() {
         setMappings([]);
         setMappingInputs({});
       }
+      void loadMonthlyPerformance();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Nieznany blad.");
+    }
+  }
+
+  async function loadMonthlyPerformance() {
+    try {
+      const response = await fetch("/api/performance/monthly");
+      if (!response.ok) {
+        throw new Error("Nie udalo sie pobrac miesiecznej historii portfela.");
+      }
+      setMonthlyPerformance((await response.json()) as MonthlyPerformanceResponse);
+    } catch {
+      setMonthlyPerformance(null);
     }
   }
 
@@ -2140,11 +2277,53 @@ export function App() {
                 <small>{data.portfolio.accounts.length} rachunki inwestycyjne</small>
               </div>
             </div>
-            <div className="portfolio-charts-grid">
-              <AllocationDonut items={data.portfolio.allocationByClass} totalValue={data.portfolio.totalValue} />
-              <AccountsBarChart accounts={data.portfolio.accounts} totalValue={data.portfolio.totalValue} />
-            </div>
-          </section>
+              <div className="portfolio-charts-grid">
+                <AllocationDonut items={data.portfolio.allocationByClass} totalValue={data.portfolio.totalValue} />
+                <AccountsBarChart accounts={data.portfolio.accounts} totalValue={data.portfolio.totalValue} />
+              </div>
+            </section>
+
+            {monthlyPerformance ? (
+              <section className="panel">
+                <div className="panel-head">
+                  <div>
+                    <p className="kicker">Monthly</p>
+                    <h2>Zmiana miesiac do miesiaca</h2>
+                  </div>
+                  <div className="interval-toggle">
+                    {(["6M", "12M", "YTD", "ALL"] as MonthlyRange[]).map((range) => (
+                      <button
+                        key={range}
+                        className={monthlyRange === range ? "interval-chip active" : "interval-chip"}
+                        onClick={() => setMonthlyRange(range)}
+                      >
+                        {range}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="portfolio-charts-grid monthly-overview-grid">
+                  <div className="stack monthly-markers-stack">
+                    <EnhancedMonthlyMarker
+                      title="Suma wszystkich kont"
+                      points={filterMonthlyPoints(monthlyPerformance.total.points, monthlyRange)}
+                    />
+                    <EnhancedMonthlyMarker
+                      title="Suma wszystkich kont"
+                      points={filterMonthlyPoints(monthlyPerformance.total.points, monthlyRange)}
+                      mode="adjusted"
+                    />
+                  </div>
+                  <div className="chart-panel">
+                    <div>
+                      <p className="kicker">Trend</p>
+                      <h3>Wartosc portfela wg miesiecy</h3>
+                    </div>
+                    <MonthlyValueChart points={filterMonthlyPoints(monthlyPerformance.total.points, monthlyRange)} />
+                  </div>
+                </div>
+              </section>
+            ) : null}
 
           {derived.xtbAccount ? (
             <section className="panel">
@@ -2154,14 +2333,15 @@ export function App() {
                   <h2>XTB</h2>
                 </div>
               </div>
-              <AccountOverview
-                title="Rachunek XTB"
-                kicker="XTB account"
-                account={derived.xtbAccount}
-                portfolioDayChangePct={data.dailyBrief.marketDataStatus.mode === "live" ? data.portfolio.dayChangePct : 0}
-                showRefresh
-                onRefresh={() => void handleRefreshMarketData()}
-              />
+                  <AccountOverview
+                    title="Rachunek XTB"
+                    kicker="XTB account"
+                    account={derived.xtbAccount}
+                    monthlyPoints={filterMonthlyPoints(monthlyPerformance?.accounts.find((item) => item.accountName === "XTB")?.points ?? [], monthlyRange)}
+                    portfolioDayChangePct={data.dailyBrief.marketDataStatus.mode === "live" ? data.portfolio.dayChangePct : 0}
+                    showRefresh
+                    onRefresh={() => void handleRefreshMarketData()}
+                  />
             </section>
           ) : null}
 
@@ -2175,14 +2355,15 @@ export function App() {
               </div>
               <div className="stack">
                 {derived.emaklerAccounts.map((account) => (
-                  <AccountOverview
-                    key={account.id}
-                    title={`Rachunek ${account.name}`}
-                    kicker="eMakler account"
-                    account={account}
-                    portfolioDayChangePct={data.dailyBrief.marketDataStatus.mode === "live" ? data.portfolio.dayChangePct : 0}
-                  />
-                ))}
+                      <AccountOverview
+                        key={account.id}
+                        title={`Rachunek ${account.name}`}
+                        kicker="eMakler account"
+                        account={account}
+                        monthlyPoints={filterMonthlyPoints(monthlyPerformance?.accounts.find((item) => item.accountName === account.name)?.points ?? [], monthlyRange)}
+                        portfolioDayChangePct={data.dailyBrief.marketDataStatus.mode === "live" ? data.portfolio.dayChangePct : 0}
+                      />
+                  ))}
               </div>
             </section>
           ) : null}
@@ -2195,13 +2376,40 @@ export function App() {
                   <h2>Obligacje Skarbowe</h2>
                 </div>
               </div>
-              <BondAccountOverview
-                title="Rachunek obligacji"
-                kicker="Treasury Bonds"
-                account={derived.treasuryBondsAccount}
-              />
-            </section>
-          ) : null}
+                <BondAccountOverview
+                  title="Rachunek obligacji"
+                  kicker="Treasury Bonds"
+                  account={derived.treasuryBondsAccount}
+                />
+                {monthlyPerformance?.accounts.find((item) => item.accountName === "Obligacje Skarbowe")?.points ? (
+                  <div className="account-monthly-panel">
+                    <div className="panel-head compact">
+                      <div>
+                        <p className="kicker">Monthly view</p>
+                        <h3>Zmiana miesiac do miesiaca</h3>
+                      </div>
+                    </div>
+                    <div className="account-monthly-grid">
+                      <div className="stack monthly-markers-stack">
+                        <EnhancedMonthlyMarker
+                          title="Koniec miesiaca"
+                          points={filterMonthlyPoints(monthlyPerformance.accounts.find((item) => item.accountName === "Obligacje Skarbowe")?.points ?? [], monthlyRange)}
+                        />
+                        <EnhancedMonthlyMarker
+                          title="Koniec miesiaca"
+                          points={filterMonthlyPoints(monthlyPerformance.accounts.find((item) => item.accountName === "Obligacje Skarbowe")?.points ?? [], monthlyRange)}
+                          mode="adjusted"
+                        />
+                      </div>
+                      <MonthlyValueChart
+                        points={filterMonthlyPoints(monthlyPerformance.accounts.find((item) => item.accountName === "Obligacje Skarbowe")?.points ?? [], monthlyRange)}
+                        accent="#c07a33"
+                      />
+                    </div>
+                  </div>
+                ) : null}
+              </section>
+            ) : null}
 
           <section className="stack auxiliary-tools">
             <details className="panel settings-panel">

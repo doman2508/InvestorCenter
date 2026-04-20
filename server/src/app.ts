@@ -17,6 +17,7 @@ import {
   upsertInstrumentMapping
 } from "./repository.js";
 import { refreshMarketData } from "./services/marketData.js";
+import { getMonthlyPerformance } from "./services/monthlyPerformance.js";
 import { getDashboard } from "./services/portfolio.js";
 import { scanMarket } from "./services/marketScanner.js";
 import { getTradeSetup, isSupportedInstrument, isSupportedInterval } from "./services/signalService.js";
@@ -116,6 +117,16 @@ export function createApp() {
 
   app.get("/api/dashboard", (_req, res) => {
     res.json(getDashboard());
+  });
+
+  app.get("/api/performance/monthly", async (_req, res) => {
+    try {
+      res.json(await getMonthlyPerformance());
+    } catch (error) {
+      res.status(500).json({
+        message: error instanceof Error ? error.message : "Nie udalo sie pobrac miesiecznej historii portfela."
+      });
+    }
   });
 
   app.post("/api/market/refresh", async (_req, res) => {

@@ -109,6 +109,30 @@ export interface DashboardResponse {
   watchlist: WatchlistItem[];
 }
 
+export interface MonthlyPerformancePoint {
+  month: string;
+  label: string;
+  value: number;
+  netFlow: number;
+  changeValue: number | null;
+  changePct: number | null;
+  flowAdjustedChangeValue: number | null;
+  flowAdjustedChangePct: number | null;
+}
+
+export interface MonthlyPerformanceResponse {
+  generatedAt: string;
+  total: {
+    points: MonthlyPerformancePoint[];
+  };
+  accounts: Array<{
+    accountId: number;
+    accountName: string;
+    accountType: string;
+    points: MonthlyPerformancePoint[];
+  }>;
+}
+
 export interface MarketScanItem {
   asset: string;
   label: string;

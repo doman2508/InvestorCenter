@@ -544,6 +544,76 @@ label {
   overflow: hidden;
 }
 
+.monthly-overview-grid {
+  align-items: stretch;
+}
+
+.monthly-marker-card {
+  min-height: 138px;
+  align-content: start;
+}
+
+.monthly-markers-stack {
+  gap: 12px;
+}
+
+.account-monthly-panel {
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid rgba(23, 34, 45, 0.08);
+}
+
+.panel-head.compact {
+  margin-bottom: 8px;
+}
+
+.panel-head.compact h3 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.account-monthly-grid {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  gap: 14px;
+  align-items: stretch;
+}
+
+.monthly-chart {
+  height: 210px;
+  display: flex;
+  align-items: end;
+}
+
+.monthly-bars {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  gap: 8px;
+  align-items: end;
+}
+
+.monthly-bar-col {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: end;
+  gap: 8px;
+}
+
+.monthly-bar-fill {
+  width: 100%;
+  min-height: 12px;
+  border-radius: 12px 12px 4px 4px;
+  box-shadow: 0 10px 18px rgba(22, 52, 73, 0.12);
+}
+
+.monthly-bar-col span {
+  text-align: center;
+  font-size: 0.8rem;
+  color: #607283;
+}
+
 .interactive-chart-shell {
   position: relative;
   margin-top: 10px;
@@ -1051,6 +1121,10 @@ textarea {
   .xtb-summary-grid,
   .portfolio-charts-grid,
   .import-sources-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .account-monthly-grid {
     grid-template-columns: 1fr;
   }
 

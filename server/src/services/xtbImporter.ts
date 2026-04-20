@@ -6,6 +6,16 @@ import type { BrokerImportResult, Transaction } from "../types.js";
 
 type RawSheetRow = Record<string, string | number | null | undefined>;
 
+const XTB_DEFAULT_MARKET_TICKERS: Record<string, string> = {
+  APPLE: "AAPL.US",
+  "MSCI ACWI": "ISAC.UK",
+  "MSCI WORLD": "IQQW.DE",
+  "MSCI WORLD ENERGY SECTOR": "WENS.NL",
+  "S&P 500": "VUSA.UK",
+  ORLEN: "PKN.PL",
+  WIG20TRSHT: "ETFBW20ST.PL"
+};
+
 const FX_CURRENCY_HINTS: Array<{ currency: string; approxRate: number }> = [
   { currency: "PLN", approxRate: 1 },
   { currency: "USD", approxRate: 3.7 },
@@ -93,6 +103,13 @@ function buildInstrumentTickerMap(rows: RawSheetRow[]) {
       map.set(instrument, ticker);
     }
   }
+
+  for (const [instrument, ticker] of Object.entries(XTB_DEFAULT_MARKET_TICKERS)) {
+    if (!map.has(instrument)) {
+      map.set(instrument, ticker);
+    }
+  }
+
   return map;
 }
 
@@ -295,7 +312,7 @@ function deriveMappingsFromComments(rows: RawSheetRow[], accountId: number) {
     if (!instrument || !comment) {
       continue;
     }
-    const tickerMatch = comment.match(/([A-Z0-9.-]+\.(?:US|UK|PL))/);
+    const tickerMatch = comment.match(/([A-Z0-9.-]+\.(?:US|UK|PL|DE|NL|WA|L|AS))/);
     if (!tickerMatch) {
       continue;
     }
@@ -307,6 +324,16 @@ function deriveMappingsFromComments(rows: RawSheetRow[], accountId: number) {
     });
     discovered += 1;
   }
+
+  for (const [instrument, marketTicker] of Object.entries(XTB_DEFAULT_MARKET_TICKERS)) {
+    upsertInstrumentMapping({
+      accountId,
+      sourceSymbol: slugifyInstrument(instrument),
+      marketTicker,
+      label: instrument
+    });
+  }
+
   return discovered;
 }
 

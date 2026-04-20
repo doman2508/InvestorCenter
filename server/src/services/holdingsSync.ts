@@ -23,6 +23,85 @@ function buildName(symbol: string) {
     .replace(/-/g, " ");
 }
 
+function buildSymbolCanonicalizer() {
+  const mappings = getInstrumentMappings();
+  const sourceToMarket = new Map(mappings.map((item) => [item.sourceSymbol, item.marketTicker]));
+  const marketToLabel = new Map(mappings.map((item) => [item.marketTicker, item.label ?? item.sourceSymbol]));
+  const sourceToLabel = new Map(mappings.map((item) => [item.sourceSymbol, item.label ?? item.sourceSymbol]));
+
+  function canonicalSymbol(symbol: string) {
+    return sourceToMarket.get(symbol) ?? symbol;
+  }
+
+  function resolveLabel(symbol: string) {
+    return sourceToLabel.get(symbol) ?? marketToLabel.get(symbol) ?? null;
+  }
+
+  return {
+    canonicalSymbol,
+    resolveLabel,
+    hasMapping(symbol: string) {
+      return sourceToMarket.has(symbol);
+    }
+  };
+}
+
+function normalizeTransactionsForHoldings(transactions: Transaction[]) {
+  type EnrichedTransaction = Transaction & { canonical: string };
+  type GroupedBucket = {
+    canonical: string;
+    rows: EnrichedTransaction[];
+    byRaw: Map<string, { quantity: number; rows: EnrichedTransaction[] }>;
+  };
+  const { canonicalSymbol, hasMapping } = buildSymbolCanonicalizer();
+  const grouped = new Map<string, GroupedBucket>();
+
+  for (const tx of transactions) {
+    const canonical = canonicalSymbol(tx.symbol);
+    const key = `${canonical}|${tx.type}|${tx.tradeDate}|${tx.price}`;
+    const bucket: GroupedBucket = grouped.get(key) ?? {
+      canonical,
+      rows: [],
+      byRaw: new Map<string, { quantity: number; rows: EnrichedTransaction[] }>()
+    };
+    const enriched: EnrichedTransaction = { ...tx, canonical };
+    bucket.rows.push(enriched);
+    const raw = bucket.byRaw.get(tx.symbol) ?? { quantity: 0, rows: [] as EnrichedTransaction[] };
+    raw.quantity += tx.quantity;
+    raw.rows.push(enriched);
+    bucket.byRaw.set(tx.symbol, raw);
+    grouped.set(key, bucket);
+  }
+
+  const result: Transaction[] = [];
+
+  for (const bucket of grouped.values()) {
+    if (bucket.byRaw.size <= 1) {
+      result.push(...bucket.rows);
+      continue;
+    }
+
+    const canonicalRaw = bucket.byRaw.get(bucket.canonical);
+    if (!canonicalRaw) {
+      result.push(...bucket.rows);
+      continue;
+    }
+
+    const legacyQuantity = Array.from(bucket.byRaw.entries())
+      .filter(([raw]) => raw !== bucket.canonical && hasMapping(raw))
+      .reduce((sum, [, item]) => sum + item.quantity, 0);
+
+    if (legacyQuantity > 0 && Math.abs(legacyQuantity - canonicalRaw.quantity) < 0.000001) {
+      result.push(...canonicalRaw.rows);
+      continue;
+    }
+
+    result.push(...bucket.rows);
+  }
+
+  return result.sort((a, b) => a.tradeDate.localeCompare(b.tradeDate));
+}
+
 function reconstructAccountHoldings(accountName: string) {
   const account = getAccounts().find((item) => item.name === accountName);
   if (!account) {
@@ -33,8 +112,10 @@ function reconstructAccountHoldings(accountName: string) {
     .filter((tx) => tx.accountId === account.id && (tx.type === "BUY" || tx.type === "SELL"))
     .sort((a, b) => a.tradeDate.localeCompare(b.tradeDate));
 
+  const normalizedTransactions = normalizeTransactionsForHoldings(transactions);
+
   const snapshots = new Map(getMarketSnapshots().map((item) => [item.symbol, item]));
-  const mappings = new Map(getInstrumentMappings().map((item) => [item.sourceSymbol, item]));
+  const { canonicalSymbol, resolveLabel } = buildSymbolCanonicalizer();
   const state = new Map<
     string,
     {
@@ -42,25 +123,29 @@ function reconstructAccountHoldings(accountName: string) {
       costValue: number;
       currency: string;
       costBasisPln: number;
+      label: string | null;
     }
   >();
 
-  for (const tx of transactions) {
-    const current = state.get(tx.symbol) ?? {
+  for (const tx of normalizedTransactions) {
+    const symbol = canonicalSymbol(tx.symbol);
+    const current = state.get(symbol) ?? {
       quantity: 0,
       costValue: 0,
       currency: tx.currency,
-      costBasisPln: 0
+      costBasisPln: 0,
+      label: resolveLabel(tx.symbol)
     };
 
     if (tx.type === "BUY") {
       current.quantity += tx.quantity;
       current.costValue += tx.quantity * tx.price + tx.fees;
       current.currency = tx.currency;
+      current.label = current.label ?? resolveLabel(tx.symbol);
       current.costBasisPln += tx.settlementCurrency === "PLN" && typeof tx.settlementValue === "number"
         ? tx.settlementValue
         : tx.quantity * tx.price + tx.fees;
-      state.set(tx.symbol, current);
+      state.set(symbol, current);
       continue;
     }
 
@@ -75,9 +160,9 @@ function reconstructAccountHoldings(accountName: string) {
       current.costValue -= averageCost * reducedQty;
       current.costBasisPln -= averageCostPln * reducedQty;
       if (current.quantity <= 0.000001) {
-        state.delete(tx.symbol);
+        state.delete(symbol);
       } else {
-        state.set(tx.symbol, current);
+        state.set(symbol, current);
       }
     }
   }
@@ -86,16 +171,16 @@ function reconstructAccountHoldings(accountName: string) {
     .filter(([, item]) => item.quantity > 0.000001)
     .map(([symbol, item]) => {
       const snapshot = snapshots.get(symbol);
-      const mapping = mappings.get(symbol);
       const averageCost = item.quantity === 0 ? 0 : item.costValue / item.quantity;
       const costBasisPln = Number(item.costBasisPln.toFixed(6));
       const impliedFxRateToPln =
         item.quantity === 0 || averageCost === 0 ? null : Number((costBasisPln / (item.quantity * averageCost)).toFixed(6));
+      const label = item.label ?? resolveLabel(symbol);
       return {
         accountId: account.id,
         symbol,
-        name: buildName(symbol),
-        assetClass: inferAssetClass(symbol, mapping?.label),
+        name: label ?? buildName(symbol),
+        assetClass: inferAssetClass(symbol, label),
         quantity: Number(item.quantity.toFixed(6)),
         averageCost: Number(averageCost.toFixed(6)),
         currentPrice: snapshot?.lastPrice ?? averageCost,

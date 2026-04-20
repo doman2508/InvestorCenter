@@ -70,6 +70,7 @@ function fmtSignedPct(value: number) {
 }
 
 type MonthlyRange = "6M" | "12M" | "YTD" | "ALL";
+type MonthlyChartMode = "value" | "pct";
 
 function filterMonthlyPoints(
   points: MonthlyPerformanceResponse["total"]["points"],
@@ -84,6 +85,27 @@ function filterMonthlyPoints(
   }
   const count = range === "6M" ? 6 : 12;
   return points.slice(-count);
+}
+
+const compactNumber = new Intl.NumberFormat("pl-PL", {
+  notation: "compact",
+  maximumFractionDigits: 1
+});
+
+function fmtCompactAmount(value: number) {
+  return `${compactNumber.format(value)} zl`;
+}
+
+function fmtChartLabel(value: number, mode: MonthlyChartMode) {
+  if (mode === "pct") {
+    return `${value > 0 ? "+" : ""}${value.toFixed(1)}%`;
+  }
+  return fmtCompactAmount(value);
+}
+
+function monthAxisLabel(value: string) {
+  const [year, month] = value.split("-");
+  return `${month}.${year.slice(2)}`;
 }
 
 function fmtDate(value: string | null) {
@@ -478,34 +500,114 @@ function AccountsBarChart({
 
 function MonthlyValueChart({
   points,
-  accent = "#216b72"
+  accent = "#216b72",
+  mode = "value"
 }: {
   points: MonthlyPerformanceResponse["total"]["points"];
   accent?: string;
-  }) {
-    if (!points.length) {
-      return <p className="muted">Brak danych miesiecznych.</p>;
-    }
+  mode?: MonthlyChartMode;
+}) {
+  if (!points.length) {
+    return <p className="muted">Brak danych miesiecznych.</p>;
+  }
 
-    const visiblePoints = points;
-    const maxValue = Math.max(...visiblePoints.map((item) => item.value), 1);
+  const width = Math.max(points.length * 92, 520);
+  const height = 240;
+  const padding = { top: 30, right: 24, bottom: 40, left: 24 };
+  const chartWidth = width - padding.left - padding.right;
+  const chartHeight = height - padding.top - padding.bottom;
+  const values = points.map((point) => (mode === "pct" ? point.changePct ?? 0 : point.value));
+  const minValue = Math.min(...values);
+  const maxValue = Math.max(...values);
+  const valueRange = maxValue - minValue || Math.max(Math.abs(maxValue), 1);
+  const paddedMin = minValue - valueRange * 0.12;
+  const paddedMax = maxValue + valueRange * 0.12;
+
+  const xForIndex = (index: number) =>
+    padding.left + (points.length === 1 ? chartWidth / 2 : (index / (points.length - 1)) * chartWidth);
+  const yForValue = (value: number) =>
+    padding.top + ((paddedMax - value) / (paddedMax - paddedMin || 1)) * chartHeight;
+
+  const path = points
+    .map((point, index) => {
+      const x = xForIndex(index);
+      const y = yForValue(mode === "pct" ? point.changePct ?? 0 : point.value);
+      return `${index === 0 ? "M" : "L"} ${x} ${y}`;
+    })
+    .join(" ");
+
+  const baselineVisible = paddedMin < 0 && paddedMax > 0;
+  const baselineY = baselineVisible ? yForValue(0) : null;
+  const gridValues =
+    mode === "pct"
+      ? [paddedMax, (paddedMax + paddedMin) / 2, paddedMin]
+      : [paddedMax, (paddedMax + paddedMin) / 2, paddedMin];
 
   return (
     <div className="monthly-chart">
-        <div className="monthly-bars" style={{ gridTemplateColumns: `repeat(${Math.max(visiblePoints.length, 1)}, minmax(0, 1fr))` }}>
-          {visiblePoints.map((point) => (
-            <div key={point.month} className="monthly-bar-col">
-            <div
-              className="monthly-bar-fill"
-              style={{
-                height: `${Math.max((point.value / maxValue) * 100, 6)}%`,
-                background: `linear-gradient(180deg, ${accent}, rgba(192, 122, 51, 0.82))`
-              }}
-              title={`${point.label}: ${fmtAmount(point.value)}`}
+      <div className="monthly-line-chart">
+        <svg
+          className="monthly-svg"
+          viewBox={`0 0 ${width} ${height}`}
+          preserveAspectRatio="none"
+          role="img"
+          aria-label={mode === "pct" ? "Miesieczna zmiana procentowa" : "Miesieczna wartosc rachunku"}
+        >
+          {gridValues.map((gridValue, index) => {
+            const y = yForValue(gridValue);
+            return (
+              <line
+                key={`${gridValue}-${index}`}
+                className="monthly-grid-line"
+                x1={padding.left}
+                x2={width - padding.right}
+                y1={y}
+                y2={y}
+              />
+            );
+          })}
+          {baselineY != null ? (
+            <line
+              className="monthly-zero-line"
+              x1={padding.left}
+              x2={width - padding.right}
+              y1={baselineY}
+              y2={baselineY}
             />
-            <span>{point.label.slice(0, 5)}</span>
-          </div>
-        ))}
+          ) : null}
+          <path
+            d={path}
+            className="monthly-line-path"
+            style={{ stroke: accent }}
+          />
+          {points.map((point, index) => {
+            const rawValue = mode === "pct" ? point.changePct ?? 0 : point.value;
+            const x = xForIndex(index);
+            const y = yForValue(rawValue);
+            const labelOffset = y < padding.top + 24 ? 18 : -12;
+            return (
+              <g key={point.month}>
+                <circle cx={x} cy={y} r={4.5} className="monthly-point-dot" style={{ fill: accent }} />
+                <text
+                  x={x}
+                  y={y + labelOffset}
+                  textAnchor="middle"
+                  className="monthly-point-label"
+                >
+                  {fmtChartLabel(rawValue, mode)}
+                </text>
+                <text
+                  x={x}
+                  y={height - 12}
+                  textAnchor="middle"
+                  className="monthly-axis-label"
+                >
+                  {monthAxisLabel(point.month)}
+                </text>
+              </g>
+            );
+          })}
+        </svg>
       </div>
     </div>
   );
@@ -889,6 +991,7 @@ function AccountOverview({
   kicker,
   account,
   monthlyPoints,
+  monthlyChartMode,
   portfolioDayChangePct,
   showRefresh,
   onRefresh
@@ -897,6 +1000,7 @@ function AccountOverview({
   kicker: string;
   account: DashboardResponse["portfolio"]["accounts"][number];
   monthlyPoints?: MonthlyPerformanceResponse["total"]["points"];
+  monthlyChartMode: MonthlyChartMode;
   portfolioDayChangePct: number;
   showRefresh?: boolean;
   onRefresh?: () => void;
@@ -998,7 +1102,7 @@ function AccountOverview({
                 <EnhancedMonthlyMarker title="Koniec miesiaca" points={monthlyPoints} />
                 <EnhancedMonthlyMarker title="Koniec miesiaca" points={monthlyPoints} mode="adjusted" />
               </div>
-              <MonthlyValueChart points={monthlyPoints} accent="#163449" />
+              <MonthlyValueChart points={monthlyPoints} accent="#163449" mode={monthlyChartMode} />
             </div>
           </div>
         ) : null}
@@ -1010,6 +1114,7 @@ export function App() {
   const [data, setData] = useState<DashboardResponse | null>(null);
   const [monthlyPerformance, setMonthlyPerformance] = useState<MonthlyPerformanceResponse | null>(null);
   const [monthlyRange, setMonthlyRange] = useState<MonthlyRange>("12M");
+  const [monthlyChartMode, setMonthlyChartMode] = useState<MonthlyChartMode>("value");
   const [view, setView] = useState<ViewName>("today");
   const [marketScan, setMarketScan] = useState<MarketScanItem[]>([]);
   const [marketScanLoading, setMarketScanLoading] = useState(false);
@@ -2290,16 +2395,32 @@ export function App() {
                     <p className="kicker">Monthly</p>
                     <h2>Zmiana miesiac do miesiaca</h2>
                   </div>
-                  <div className="interval-toggle">
-                    {(["6M", "12M", "YTD", "ALL"] as MonthlyRange[]).map((range) => (
+                  <div className="monthly-toolbar">
+                    <div className="interval-toggle">
+                      {(["6M", "12M", "YTD", "ALL"] as MonthlyRange[]).map((range) => (
+                        <button
+                          key={range}
+                          className={monthlyRange === range ? "interval-chip active" : "interval-chip"}
+                          onClick={() => setMonthlyRange(range)}
+                        >
+                          {range}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="interval-toggle">
                       <button
-                        key={range}
-                        className={monthlyRange === range ? "interval-chip active" : "interval-chip"}
-                        onClick={() => setMonthlyRange(range)}
+                        className={monthlyChartMode === "value" ? "interval-chip active" : "interval-chip"}
+                        onClick={() => setMonthlyChartMode("value")}
                       >
-                        {range}
+                        Wartosc
                       </button>
-                    ))}
+                      <button
+                        className={monthlyChartMode === "pct" ? "interval-chip active" : "interval-chip"}
+                        onClick={() => setMonthlyChartMode("pct")}
+                      >
+                        Zmiana %
+                      </button>
+                    </div>
                   </div>
                 </div>
                 <div className="portfolio-charts-grid monthly-overview-grid">
@@ -2314,16 +2435,19 @@ export function App() {
                       mode="adjusted"
                     />
                   </div>
-                  <div className="chart-panel">
-                    <div>
-                      <p className="kicker">Trend</p>
-                      <h3>Wartosc portfela wg miesiecy</h3>
+                    <div className="chart-panel">
+                      <div>
+                        <p className="kicker">Trend</p>
+                        <h3>{monthlyChartMode === "value" ? "Wartosc portfela wg miesiecy" : "Miesieczna zmiana % portfela"}</h3>
+                      </div>
+                      <MonthlyValueChart
+                        points={filterMonthlyPoints(monthlyPerformance.total.points, monthlyRange)}
+                        mode={monthlyChartMode}
+                      />
                     </div>
-                    <MonthlyValueChart points={filterMonthlyPoints(monthlyPerformance.total.points, monthlyRange)} />
                   </div>
-                </div>
-              </section>
-            ) : null}
+                </section>
+              ) : null}
 
           {derived.xtbAccount ? (
             <section className="panel">
@@ -2333,15 +2457,16 @@ export function App() {
                   <h2>XTB</h2>
                 </div>
               </div>
-                  <AccountOverview
-                    title="Rachunek XTB"
-                    kicker="XTB account"
-                    account={derived.xtbAccount}
-                    monthlyPoints={filterMonthlyPoints(monthlyPerformance?.accounts.find((item) => item.accountName === "XTB")?.points ?? [], monthlyRange)}
-                    portfolioDayChangePct={data.dailyBrief.marketDataStatus.mode === "live" ? data.portfolio.dayChangePct : 0}
-                    showRefresh
-                    onRefresh={() => void handleRefreshMarketData()}
-                  />
+                    <AccountOverview
+                      title="Rachunek XTB"
+                      kicker="XTB account"
+                      account={derived.xtbAccount}
+                      monthlyPoints={filterMonthlyPoints(monthlyPerformance?.accounts.find((item) => item.accountName === "XTB")?.points ?? [], monthlyRange)}
+                      monthlyChartMode={monthlyChartMode}
+                      portfolioDayChangePct={data.dailyBrief.marketDataStatus.mode === "live" ? data.portfolio.dayChangePct : 0}
+                      showRefresh
+                      onRefresh={() => void handleRefreshMarketData()}
+                    />
             </section>
           ) : null}
 
@@ -2355,15 +2480,16 @@ export function App() {
               </div>
               <div className="stack">
                 {derived.emaklerAccounts.map((account) => (
-                      <AccountOverview
-                        key={account.id}
-                        title={`Rachunek ${account.name}`}
-                        kicker="eMakler account"
-                        account={account}
-                        monthlyPoints={filterMonthlyPoints(monthlyPerformance?.accounts.find((item) => item.accountName === account.name)?.points ?? [], monthlyRange)}
-                        portfolioDayChangePct={data.dailyBrief.marketDataStatus.mode === "live" ? data.portfolio.dayChangePct : 0}
-                      />
-                  ))}
+                        <AccountOverview
+                          key={account.id}
+                          title={`Rachunek ${account.name}`}
+                          kicker="eMakler account"
+                          account={account}
+                          monthlyPoints={filterMonthlyPoints(monthlyPerformance?.accounts.find((item) => item.accountName === account.name)?.points ?? [], monthlyRange)}
+                          monthlyChartMode={monthlyChartMode}
+                          portfolioDayChangePct={data.dailyBrief.marketDataStatus.mode === "live" ? data.portfolio.dayChangePct : 0}
+                        />
+                    ))}
               </div>
             </section>
           ) : null}
@@ -2401,13 +2527,14 @@ export function App() {
                           mode="adjusted"
                         />
                       </div>
-                      <MonthlyValueChart
-                        points={filterMonthlyPoints(monthlyPerformance.accounts.find((item) => item.accountName === "Obligacje Skarbowe")?.points ?? [], monthlyRange)}
-                        accent="#c07a33"
-                      />
+                        <MonthlyValueChart
+                          points={filterMonthlyPoints(monthlyPerformance.accounts.find((item) => item.accountName === "Obligacje Skarbowe")?.points ?? [], monthlyRange)}
+                          accent="#c07a33"
+                          mode={monthlyChartMode}
+                        />
+                      </div>
                     </div>
-                  </div>
-                ) : null}
+                  ) : null}
               </section>
             ) : null}
 

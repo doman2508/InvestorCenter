@@ -208,8 +208,7 @@ function buildCashTransactions(rows: RawSheetRow[], accountId: number, instrumen
             ? "SELL"
             : "BUY";
       const inferredCurrency = extractCurrencyFromComment(comment) ?? inferCurrencyFromAmount(amount, parsedTrade.quantity, parsedTrade.unitPrice);
-
-      transactions.push({
+      const transaction: Omit<Transaction, "id"> = {
         accountId,
         symbol: resolvedSymbol,
         tradeDate,
@@ -218,7 +217,14 @@ function buildCashTransactions(rows: RawSheetRow[], accountId: number, instrumen
         price: parsedTrade.unitPrice,
         fees: 0,
         currency: inferredCurrency
-      });
+      };
+
+      if (amount !== 0) {
+        transaction.settlementValue = Math.abs(amount);
+        transaction.settlementCurrency = "PLN";
+      }
+
+      transactions.push(transaction);
       continue;
     }
 

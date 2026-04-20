@@ -142,6 +142,24 @@ export function replaceTransactionsForAccount(accountId: number, rows: Omit<Tran
   return rebuilt;
 }
 
+export function clearAccountPortfolioData(accountId: number) {
+  const store = readStore();
+  const removedTransactions = store.transactions.filter((item) => item.accountId === accountId).length;
+  const removedHoldings = store.holdings.filter((item) => item.accountId === accountId).length;
+  const removedMappings = store.instrumentMappings.filter((item) => item.accountId === accountId).length;
+
+  store.transactions = store.transactions.filter((item) => item.accountId !== accountId);
+  store.holdings = store.holdings.filter((item) => item.accountId !== accountId);
+  store.instrumentMappings = store.instrumentMappings.filter((item) => item.accountId !== accountId);
+  writeStore(store);
+
+  return {
+    removedTransactions,
+    removedHoldings,
+    removedMappings
+  };
+}
+
 export function addHolding(input: CreateHoldingInput) {
   const store = readStore();
   const nextId = store.holdings.length === 0 ? 1 : Math.max(...store.holdings.map((item) => item.id)) + 1;

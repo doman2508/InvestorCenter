@@ -1237,6 +1237,21 @@ export function App() {
     await loadDashboard();
   }
 
+  async function handleResetXtb() {
+    setActiveImportKey("xtb-reset");
+    const response = await fetch("/api/holdings/reset-xtb", { method: "POST" });
+    const json = await response.json();
+    setActiveImportKey(null);
+    if (!response.ok) {
+      setImportMessage(json.message ?? "Nie udalo sie wyczyscic XTB.");
+      return;
+    }
+    setImportMessage(
+      `Wyczyszczono XTB: transakcje ${json.removedTransactions}, pozycje ${json.removedHoldings}, mapowania ${json.removedMappings}. Zaimportuj teraz swiezy plik XTB.`
+    );
+    await loadDashboard();
+  }
+
   async function handleTreasuryBondsImport() {
     if (!treasuryBondsFile) {
       setImportMessage("Najpierw wybierz plik z obligacjami.");
@@ -2215,6 +2230,9 @@ export function App() {
                           {activeImportKey === "xtb" ? "Import trwa..." : "Importuj z XTB"}
                         </button>
                         <button className="secondary-button" onClick={handleSyncHoldings}>Przelicz pozycje</button>
+                        <button className="ghost-button" onClick={handleResetXtb} disabled={activeImportKey === "xtb-reset"}>
+                          {activeImportKey === "xtb-reset" ? "Czyszczenie..." : "Wyczysc XTB"}
+                        </button>
                       </div>
                     </div>
 

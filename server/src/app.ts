@@ -7,8 +7,10 @@ import { z } from "zod";
 import {
   addHolding,
   addWatchlistItem,
+  clearAccountPortfolioData,
   deleteHolding,
   deleteWatchlistItem,
+  getAccounts,
   getInstrumentMappings,
   updateHolding,
   updateWatchlistItem,
@@ -283,6 +285,15 @@ export function createApp() {
 
   app.post("/api/holdings/sync", (_req, res) => {
     res.json(syncPortfolioHoldings());
+  });
+
+  app.post("/api/holdings/reset-xtb", (_req, res) => {
+    const account = getAccounts().find((item) => item.name === "XTB");
+    if (!account) {
+      res.status(404).json({ message: "XTB account not found." });
+      return;
+    }
+    res.json(clearAccountPortfolioData(account.id));
   });
 
   app.post("/api/holdings", (req, res) => {

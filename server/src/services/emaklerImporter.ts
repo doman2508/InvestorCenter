@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { getAccounts, upsertInstrumentMapping, upsertTransactions } from "../repository.js";
+import { getAccounts, replaceTransactionsForAccount, upsertInstrumentMapping } from "../repository.js";
 import type { BrokerImportResult, Transaction } from "../types.js";
 
 function isHeaderRow(line: string) {
@@ -39,6 +39,34 @@ function mapExchangeToTicker(symbol: string, exchange: string) {
     return `${symbol}.WA`;
   }
   return symbol;
+}
+
+function aggregateTransactions(rows: Omit<Transaction, "id">[]) {
+  const grouped = new Map<string, Omit<Transaction, "id">>();
+
+  for (const row of rows) {
+    const key = [
+      row.accountId,
+      row.symbol,
+      row.tradeDate,
+      row.type,
+      row.price,
+      row.currency,
+      row.settlementCurrency ?? ""
+    ].join("|");
+
+    const existing = grouped.get(key);
+    if (!existing) {
+      grouped.set(key, { ...row });
+      continue;
+    }
+
+    existing.quantity += row.quantity;
+    existing.fees += row.fees;
+    existing.settlementValue = (existing.settlementValue ?? 0) + (row.settlementValue ?? 0);
+  }
+
+  return Array.from(grouped.values());
 }
 
 export function importEmaklerHistory(filePath: string, accountName: string): BrokerImportResult {
@@ -151,14 +179,17 @@ export function importEmaklerHistory(filePath: string, accountName: string): Bro
     };
   }
 
-  const result = upsertTransactions(parsedRows);
+  const aggregatedRows = aggregateTransactions(parsedRows);
+  const replaced = replaceTransactionsForAccount(account.id, aggregatedRows);
   return {
-    imported: result.imported,
-    skipped: result.skipped,
+    imported: replaced.length,
+    skipped: 0,
     errors: [],
     notes: [
       `Parsed ${parsedRows.length} eMakler transactions for ${accountName}.`,
-      `Updated ${mappedTickers} instrument mappings from exchange hints.`
+      `Collapsed to ${aggregatedRows.length} unique trade rows before dedupe.`,
+      `Updated ${mappedTickers} instrument mappings from exchange hints.`,
+      `Replaced existing ${accountName} transaction history with the latest CSV import.`
     ]
   };
 }

@@ -1,6 +1,13 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent, type FormEvent } from "react";
 import { CandlestickSeries, ColorType, createChart } from "lightweight-charts";
-import type { DashboardResponse, InstrumentMapping, MarketScanItem, MonthlyPerformanceResponse, TradeSetupResponse } from "./types";
+import type {
+  AuthSessionResponse,
+  DashboardResponse,
+  InstrumentMapping,
+  MarketScanItem,
+  MonthlyPerformanceResponse,
+  TradeSetupResponse
+} from "./types";
 
 type ViewName = "today" | "portfolio" | "market-radar" | "trade-setup" | "watchlist";
 type AssetClass = "ETF" | "STOCK" | "BOND" | "COMMODITY" | "CASH";
@@ -1112,6 +1119,10 @@ function AccountOverview({
 
 export function App() {
   const [data, setData] = useState<DashboardResponse | null>(null);
+  const [authSession, setAuthSession] = useState<AuthSessionResponse | null>(null);
+  const [authStatus, setAuthStatus] = useState<"loading" | "authenticated" | "unauthenticated">("loading");
+  const [loginForm, setLoginForm] = useState({ username: "admin", password: "" });
+  const [loginMessage, setLoginMessage] = useState("");
   const [monthlyPerformance, setMonthlyPerformance] = useState<MonthlyPerformanceResponse | null>(null);
   const [monthlyRange, setMonthlyRange] = useState<MonthlyRange>("12M");
   const [monthlyChartMode, setMonthlyChartMode] = useState<MonthlyChartMode>("value");
@@ -1148,15 +1159,106 @@ export function App() {
   const [mappings, setMappings] = useState<InstrumentMapping[]>([]);
   const [mappingInputs, setMappingInputs] = useState<Record<string, string>>({});
 
+  async function apiRequest(input: RequestInfo | URL, init?: RequestInit) {
+    const response = await fetch(input, {
+      ...init,
+      credentials: "include"
+    });
+    if (response.status === 401) {
+      setAuthStatus("unauthenticated");
+      setAuthSession((prev) => ({
+        authenticated: false,
+        configured: prev?.configured ?? true,
+        username: prev?.username ?? loginForm.username
+      }));
+      setData(null);
+      throw new Error("Sesja wygasla. Zaloguj sie ponownie.");
+    }
+    return response;
+  }
+
+  async function loadSession() {
+    try {
+      const response = await fetch("/api/auth/session", {
+        credentials: "include"
+      });
+      const json = (await response.json()) as AuthSessionResponse;
+      setAuthSession(json);
+      setLoginForm((current) => ({
+        username: current.username || json.username || "admin",
+        password: current.password
+      }));
+      setAuthStatus(json.authenticated ? "authenticated" : "unauthenticated");
+      setLoginMessage(json.configured ? "" : "Ustaw haslo logowania na serwerze, zeby wlaczyc dostep do aplikacji.");
+    } catch {
+      setAuthStatus("unauthenticated");
+      setAuthSession({
+        authenticated: false,
+        configured: true,
+        username: loginForm.username
+      });
+      setLoginMessage("Nie udalo sie sprawdzic sesji logowania.");
+    }
+  }
+
+  async function handleLogin(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setLoginMessage("");
+    try {
+      const response = await fetch("/api/auth/login", {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(loginForm)
+      });
+      const json = (await response.json()) as AuthSessionResponse;
+      if (!response.ok) {
+        setAuthSession(json);
+        setAuthStatus("unauthenticated");
+        setLoginMessage(json.message ?? "Nie udalo sie zalogowac.");
+        return;
+      }
+      setAuthSession(json);
+      setAuthStatus("authenticated");
+      setLoginForm((current) => ({
+        ...current,
+        password: ""
+      }));
+      await loadDashboard();
+      await loadMarketScan();
+    } catch (err) {
+      setLoginMessage(err instanceof Error ? err.message : "Nie udalo sie zalogowac.");
+    }
+  }
+
+  async function handleLogout() {
+    await fetch("/api/auth/logout", {
+      method: "POST",
+      credentials: "include"
+    });
+    setAuthStatus("unauthenticated");
+    setData(null);
+    setMonthlyPerformance(null);
+    setMarketScan([]);
+    setTradeSetup(null);
+    setLoginForm((current) => ({
+      ...current,
+      password: ""
+    }));
+    await loadSession();
+  }
+
   async function loadDashboard() {
     try {
       setError(null);
-      const response = await fetch("/api/dashboard");
+      const response = await apiRequest("/api/dashboard");
       if (!response.ok) {
         throw new Error("Nie udalo sie pobrac dashboardu.");
       }
       setData((await response.json()) as DashboardResponse);
-      const mappingsResponse = await fetch("/api/instrument-mappings");
+      const mappingsResponse = await apiRequest("/api/instrument-mappings");
       if (mappingsResponse.ok) {
         const rawMappings = await mappingsResponse.json();
         const mappingsJson = Array.isArray(rawMappings) ? (rawMappings as InstrumentMapping[]) : [];
@@ -1176,7 +1278,7 @@ export function App() {
 
   async function loadMonthlyPerformance() {
     try {
-      const response = await fetch("/api/performance/monthly");
+      const response = await apiRequest("/api/performance/monthly");
       if (!response.ok) {
         throw new Error("Nie udalo sie pobrac miesiecznej historii portfela.");
       }
@@ -1190,7 +1292,7 @@ export function App() {
     try {
       setTradeSetupLoading(true);
       setTradeSetupError(null);
-      const response = await fetch(`/api/trade-setup?instrument=${encodeURIComponent(instrument)}&interval=${encodeURIComponent(interval)}`);
+      const response = await apiRequest(`/api/trade-setup?instrument=${encodeURIComponent(instrument)}&interval=${encodeURIComponent(interval)}`);
       const json = await response.json();
       if (!response.ok) {
         throw new Error(json.message ?? "Nie udalo sie pobrac trade setupu.");
@@ -1208,7 +1310,7 @@ export function App() {
     try {
       setMarketScanLoading(true);
       setMarketScanError(null);
-      const response = await fetch("/api/market/scan");
+      const response = await apiRequest("/api/market/scan");
       const json = await response.json();
       if (!response.ok) {
         throw new Error(json.message ?? "Nie udalo sie pobrac market radaru.");
@@ -1223,28 +1325,35 @@ export function App() {
   }
 
   useEffect(() => {
-    void loadDashboard();
-    void loadMarketScan();
+    void loadSession();
   }, []);
 
   useEffect(() => {
-    if (view !== "trade-setup") {
+    if (authStatus !== "authenticated") {
+      return;
+    }
+    void loadDashboard();
+    void loadMarketScan();
+  }, [authStatus]);
+
+  useEffect(() => {
+    if (authStatus !== "authenticated" || view !== "trade-setup") {
       return;
     }
     const interval = window.setInterval(() => {
       void loadTradeSetup();
     }, 60000);
     return () => window.clearInterval(interval);
-  }, [view, tradeInstrument, tradeInterval]);
+  }, [authStatus, view, tradeInstrument, tradeInterval]);
 
   useEffect(() => {
-    if (view === "trade-setup") {
+    if (authStatus === "authenticated" && view === "trade-setup") {
       void loadTradeSetup(tradeInstrument, tradeInterval);
     }
-  }, [tradeInstrument, tradeInterval, view]);
+  }, [authStatus, tradeInstrument, tradeInterval, view]);
 
   useEffect(() => {
-    if (view !== "market-radar") {
+    if (authStatus !== "authenticated" || view !== "market-radar") {
       return;
     }
     void loadMarketScan();
@@ -1252,7 +1361,7 @@ export function App() {
       void loadMarketScan();
     }, 120000);
     return () => window.clearInterval(interval);
-  }, [view]);
+  }, [authStatus, view]);
 
   const derived = useMemo(() => {
     if (!data) {
@@ -1393,7 +1502,7 @@ export function App() {
   }, [investmentAmount, positionInput, tradePlanMode, tradeSetup]);
 
   async function handleImport() {
-    const response = await fetch("/api/import/csv", {
+    const response = await apiRequest("/api/import/csv", {
       method: "POST",
       headers: {
         "Content-Type": "text/csv"
@@ -1417,7 +1526,7 @@ export function App() {
     setActiveImportKey("xtb");
     const formData = new FormData();
     formData.append("file", xtbFile);
-    const response = await fetch("/api/import/xtb-upload", {
+    const response = await apiRequest("/api/import/xtb-upload", {
       method: "POST",
       body: formData
     });
@@ -1447,7 +1556,7 @@ export function App() {
     const formData = new FormData();
     formData.append("file", file);
     formData.append("accountName", accountName);
-    const response = await fetch("/api/import/emakler-upload", {
+    const response = await apiRequest("/api/import/emakler-upload", {
       method: "POST",
       body: formData
     });
@@ -1457,7 +1566,7 @@ export function App() {
       setImportMessage(json.errors?.join(" ") ?? json.message ?? `eMakler import failed for ${accountName}.`);
       return;
     }
-    const refreshResponse = await fetch("/api/market/refresh", { method: "POST" });
+    const refreshResponse = await apiRequest("/api/market/refresh", { method: "POST" });
     const refreshJson = await refreshResponse.json();
     setImportMessage(
       `eMakler ${accountName}: ${json.imported} nowych, ${json.skipped} juz bylo w bazie. ${json.notes?.join(" ") ?? ""} ${
@@ -1473,7 +1582,7 @@ export function App() {
   }
 
   async function handleSyncHoldings() {
-    const response = await fetch("/api/holdings/sync", { method: "POST" });
+    const response = await apiRequest("/api/holdings/sync", { method: "POST" });
     const json = await response.json();
     setImportMessage(`Przeliczono aktualne pozycje XTB: ${json.rebuiltXtb}.`);
     await loadDashboard();
@@ -1481,7 +1590,7 @@ export function App() {
 
   async function handleResetXtb() {
     setActiveImportKey("xtb-reset");
-    const response = await fetch("/api/holdings/reset-xtb", { method: "POST" });
+    const response = await apiRequest("/api/holdings/reset-xtb", { method: "POST" });
     const json = await response.json();
     setActiveImportKey(null);
     if (!response.ok) {
@@ -1502,7 +1611,7 @@ export function App() {
     setActiveImportKey("treasury");
     const formData = new FormData();
     formData.append("file", treasuryBondsFile);
-    const response = await fetch("/api/import/treasury-bonds-upload", {
+    const response = await apiRequest("/api/import/treasury-bonds-upload", {
       method: "POST",
       body: formData
     });
@@ -1523,7 +1632,7 @@ export function App() {
       setImportMessage(`Enter a market ticker for ${sourceSymbol}.`);
       return;
     }
-    const response = await fetch("/api/instrument-mappings", {
+    const response = await apiRequest("/api/instrument-mappings", {
       method: "POST",
       headers: {
         "Content-Type": "application/json"
@@ -1545,7 +1654,7 @@ export function App() {
   }
 
   async function handleRefreshMarketData() {
-    const response = await fetch("/api/market/refresh", { method: "POST" });
+    const response = await apiRequest("/api/market/refresh", { method: "POST" });
     const json = await response.json();
     setRefreshMessage(json.message ?? "Refresh finished.");
     await loadDashboard();
@@ -1579,7 +1688,7 @@ export function App() {
   async function handleAddHolding(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setActionMessage("");
-    const response = await fetch(editingHoldingId ? `/api/holdings/${editingHoldingId}` : "/api/holdings", {
+    const response = await apiRequest(editingHoldingId ? `/api/holdings/${editingHoldingId}` : "/api/holdings", {
       method: editingHoldingId ? "PUT" : "POST",
       headers: {
         "Content-Type": "application/json"
@@ -1615,7 +1724,7 @@ export function App() {
   async function handleAddWatchlist(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setActionMessage("");
-    const response = await fetch(editingWatchlistId ? `/api/watchlist/${editingWatchlistId}` : "/api/watchlist", {
+    const response = await apiRequest(editingWatchlistId ? `/api/watchlist/${editingWatchlistId}` : "/api/watchlist", {
       method: editingWatchlistId ? "PUT" : "POST",
       headers: {
         "Content-Type": "application/json"
@@ -1644,15 +1753,76 @@ export function App() {
   }
 
   async function handleDeleteHolding(id: number) {
-    await fetch(`/api/holdings/${id}`, { method: "DELETE" });
+    await apiRequest(`/api/holdings/${id}`, { method: "DELETE" });
     setActionMessage("Holding deleted.");
     await loadDashboard();
   }
 
   async function handleDeleteWatchlist(id: number) {
-    await fetch(`/api/watchlist/${id}`, { method: "DELETE" });
+    await apiRequest(`/api/watchlist/${id}`, { method: "DELETE" });
     setActionMessage("Watchlist item deleted.");
     await loadDashboard();
+  }
+
+  if (authStatus === "loading") {
+    return (
+      <main className="shell">
+        <section className="panel auth-panel">
+          <p className="eyebrow">Investor Center</p>
+          <h1>Sprawdzamy sesje logowania</h1>
+          <p className="muted">Aplikacja przygotowuje bezpieczny dostep do Twojego portfela.</p>
+        </section>
+      </main>
+    );
+  }
+
+  if (authStatus !== "authenticated") {
+    return (
+      <main className="shell">
+        <section className="hero auth-hero">
+          <div className="hero-main">
+            <p className="eyebrow">Investor Center</p>
+            <h1>Bezpieczny dostep do centrum decyzji inwestora.</h1>
+            <p className="hero-copy">
+              Zaloguj sie, zeby zobaczyc portfel, radar rynku i setupy transakcyjne.
+            </p>
+            {!authSession?.configured ? (
+              <div className="auth-hint">
+                <strong>Brakuje konfiguracji logowania na serwerze.</strong>
+                <p className="muted">Ustaw na Railway: <code>INVESTOR_CENTER_AUTH_PASSWORD</code> oraz opcjonalnie <code>INVESTOR_CENTER_AUTH_USERNAME</code>.</p>
+              </div>
+            ) : null}
+          </div>
+          <div className="panel auth-card">
+            <p className="kicker">Logowanie</p>
+            <h2>Wejdz do systemu</h2>
+            <form className="stack auth-form" onSubmit={(event) => void handleLogin(event)}>
+              <label>
+                Login
+                <input
+                  value={loginForm.username}
+                  onChange={(event) => setLoginForm((current) => ({ ...current, username: event.target.value }))}
+                  autoComplete="username"
+                />
+              </label>
+              <label>
+                Haslo
+                <input
+                  type="password"
+                  value={loginForm.password}
+                  onChange={(event) => setLoginForm((current) => ({ ...current, password: event.target.value }))}
+                  autoComplete="current-password"
+                />
+              </label>
+              <button className="primary-button" type="submit" disabled={!authSession?.configured}>
+                Zaloguj
+              </button>
+              {loginMessage ? <p className="auth-message">{loginMessage}</p> : null}
+            </form>
+          </div>
+        </section>
+      </main>
+    );
   }
 
   if (error) {
@@ -1710,13 +1880,19 @@ export function App() {
         </section>
       ) : null}
 
-      <nav className="tabs" aria-label="Main views">
-        <button className={view === "today" ? "tab active" : "tab"} onClick={() => setView("today")}>Today</button>
-        <button className={view === "portfolio" ? "tab active" : "tab"} onClick={() => setView("portfolio")}>Portfolio</button>
-        <button className={view === "market-radar" ? "tab active" : "tab"} onClick={() => setView("market-radar")}>Market Radar</button>
-        <button className={view === "trade-setup" ? "tab active" : "tab"} onClick={() => setView("trade-setup")}>Trade Setup</button>
-        <button className={view === "watchlist" ? "tab active" : "tab"} onClick={() => setView("watchlist")}>Watchlist</button>
-      </nav>
+      <div className="session-bar">
+        <nav className="tabs" aria-label="Main views">
+          <button className={view === "today" ? "tab active" : "tab"} onClick={() => setView("today")}>Today</button>
+          <button className={view === "portfolio" ? "tab active" : "tab"} onClick={() => setView("portfolio")}>Portfolio</button>
+          <button className={view === "market-radar" ? "tab active" : "tab"} onClick={() => setView("market-radar")}>Market Radar</button>
+          <button className={view === "trade-setup" ? "tab active" : "tab"} onClick={() => setView("trade-setup")}>Trade Setup</button>
+          <button className={view === "watchlist" ? "tab active" : "tab"} onClick={() => setView("watchlist")}>Watchlist</button>
+        </nav>
+        <div className="session-actions">
+          <span className="chip">Zalogowany: {authSession?.username ?? loginForm.username}</span>
+          <button className="secondary-button" onClick={() => void handleLogout()}>Wyloguj</button>
+        </div>
+      </div>
 
       {view === "today" ? (
         <section className="stack">

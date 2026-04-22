@@ -109,6 +109,13 @@ export interface DashboardResponse {
   watchlist: WatchlistItem[];
 }
 
+export interface AuthSessionResponse {
+  authenticated: boolean;
+  configured: boolean;
+  username: string;
+  message?: string;
+}
+
 export interface MonthlyPerformancePoint {
   month: string;
   label: string;

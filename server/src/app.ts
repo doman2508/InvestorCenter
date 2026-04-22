@@ -26,6 +26,13 @@ import { importEmaklerHistory } from "./services/emaklerImporter.js";
 import { importTreasuryBondsWorkbook } from "./services/treasuryBondsImporter.js";
 import { importXtbWorkbook } from "./services/xtbImporter.js";
 import { syncHoldingsForAccount, syncPortfolioHoldings } from "./services/holdingsSync.js";
+import {
+  applyAuthCookie,
+  clearAuthSession,
+  getAuthSessionState,
+  loginWithPassword,
+  requireAuth
+} from "./services/auth.js";
 
 const createHoldingSchema = z.object({
   accountId: z.coerce.number().int().positive(),
@@ -77,6 +84,11 @@ const instrumentMappingSchema = z.object({
   label: z.string().optional().nullable()
 });
 
+const loginSchema = z.object({
+  username: z.string().min(1),
+  password: z.string().min(1)
+});
+
 const uploadDir = path.join(process.cwd(), "data", "uploads");
 fs.mkdirSync(uploadDir, { recursive: true });
 
@@ -107,13 +119,48 @@ function removeUploadedFile(filePath: string) {
 
 export function createApp() {
   const app = express();
-  app.use(cors());
+  app.use(cors({ credentials: true, origin: true }));
   app.use(express.json());
   app.use(express.text({ type: ["text/csv", "text/plain"] }));
 
   app.get("/api/health", (_req, res) => {
     res.json({ ok: true });
   });
+
+  app.get("/api/auth/session", (req, res) => {
+    res.json(getAuthSessionState(req));
+  });
+
+  app.post("/api/auth/login", (req, res) => {
+    const parsed = loginSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ message: parsed.error.issues[0]?.message ?? "Nieprawidlowe dane logowania." });
+      return;
+    }
+    const result = loginWithPassword(parsed.data.username, parsed.data.password);
+    if (!result.ok) {
+      res.status(result.configured ? 401 : 503).json({
+        authenticated: false,
+        configured: result.configured,
+        username: parsed.data.username,
+        message: result.message
+      });
+      return;
+    }
+    applyAuthCookie(res, result.token);
+    res.json({
+      authenticated: true,
+      configured: true,
+      username: result.username
+    });
+  });
+
+  app.post("/api/auth/logout", (req, res) => {
+    clearAuthSession(req, res);
+    res.status(204).send();
+  });
+
+  app.use("/api", requireAuth);
 
   app.get("/api/dashboard", (_req, res) => {
     res.json(getDashboard());

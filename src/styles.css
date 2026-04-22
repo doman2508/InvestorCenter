@@ -151,6 +151,29 @@ label {
   margin: 20px 0;
 }
 
+.session-bar,
+.session-actions,
+.auth-form {
+  display: flex;
+  gap: 12px;
+}
+
+.session-bar {
+  margin: 20px 0;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+
+.session-bar .tabs {
+  margin: 0;
+}
+
+.session-actions {
+  align-items: center;
+  flex-wrap: wrap;
+}
+
 .tab {
   cursor: pointer;
   border: 0;
@@ -176,6 +199,42 @@ label {
 .panel {
   border-radius: 26px;
   padding: 22px;
+}
+
+.auth-hero {
+  align-items: stretch;
+}
+
+.auth-card,
+.auth-panel {
+  align-content: start;
+}
+
+.auth-card h2,
+.auth-panel h1 {
+  margin: 0 0 10px;
+}
+
+.auth-form {
+  flex-direction: column;
+}
+
+.auth-hint {
+  margin-top: 18px;
+  padding: 16px;
+  border-radius: 18px;
+  background: rgba(22, 52, 73, 0.06);
+  border: 1px solid rgba(23, 34, 45, 0.08);
+}
+
+.auth-hint strong {
+  display: block;
+  margin-bottom: 6px;
+}
+
+.auth-message {
+  margin: 0;
+  color: #9d3f2a;
 }
 
 .panel.wide {
@@ -1158,6 +1217,8 @@ textarea {
   }
 
   .stat-row,
+  .session-bar,
+  .session-actions,
   .panel-head,
   .settings-panel summary,
   .watch-header,
